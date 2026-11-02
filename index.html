@@ -474,8 +474,15 @@ details.fold summary::-webkit-details-marker{display:none}
 }
 
 /* ---------- Footer ---------- */
-.closing{margin:clamp(34px,6vw,70px) auto 0;text-align:center}
-.closing img{width:min(78vw,300px);height:auto;border:1px solid var(--rule);box-shadow:0 12px 24px -12px rgba(67,37,18,.55)}
+.closing{margin:clamp(40px,7vw,84px) auto 0;text-align:center;padding:0 8px}
+.closing p{margin:0}
+.closing .orn{margin:clamp(12px,2vw,20px) auto;max-width:min(88%,340px)}
+.closing .orn.big{max-width:min(92%,420px)}
+.closing .orn.big .heart{width:28px;height:28px}
+.cl-name{font-family:var(--display);font-weight:700;font-size:clamp(1.05rem,2.6vw,1.45rem);letter-spacing:.16em;text-transform:uppercase}
+.cl-quote{font-family:var(--script);font-size:clamp(2.3rem,6.2vw,4rem);line-height:1.08;max-width:40ch;text-wrap:balance;margin:0 auto!important}
+.cl-small{font-size:clamp(1.02rem,2.2vw,1.25rem);letter-spacing:.04em}
+.cl-fam{font-family:var(--display);font-weight:500;font-size:clamp(.95rem,2.2vw,1.2rem);letter-spacing:.24em;text-transform:uppercase}
 
 /* ---------- Print: just the recipe ---------- */
 @media print{
@@ -683,8 +690,13 @@ details.fold summary::-webkit-details-marker{display:none}
   <main id="view-recipe" hidden></main>
 
   <footer class="closing no-print">
-    <img src="images/back-cover.jpg" width="720" height="932" loading="lazy"
-         alt="The best memories are made around the table. Draper and Willis Family Recipes. Collected with love, shared with family.">
+    <p class="cl-name">Draper &amp; Willis</p>
+    <div class="orn rule" aria-hidden="true"><svg class="heart"><use href="#heart-sym"/></svg></div>
+    <p class="cl-quote">&ldquo;The best memories are made around the table.&rdquo;</p>
+    <div class="orn rule big" aria-hidden="true"><svg class="heart"><use href="#heart-sym"/></svg></div>
+    <p class="cl-small">Collected with love &middot; Shared with family</p>
+    <div class="orn rule" aria-hidden="true"><svg class="heart"><use href="#heart-sym"/></svg></div>
+    <p class="cl-fam">Family Recipes</p>
   </footer>
 
 </div>
