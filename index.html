@@ -493,6 +493,10 @@ body.is-home .topbar .home-btn{visibility:hidden}
 body.is-home .home-bottom{display:none}
 @media (max-width:520px){.home-btn{font-size:.74rem;gap:6px;padding:.2rem .6rem}.home-btn .rs{width:38px}.home-bottom .home-btn{font-size:.9rem;padding:.3rem .8rem;gap:8px}.home-bottom .home-btn .rs{width:46px}}
 
+.recipe-head .from .contrib-link{color:inherit;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:5px}
+.recipe-head .from .contrib-link:hover{color:var(--olive-deep)}
+@media print{.recipe-head .from .contrib-link{text-decoration:none}}
+
 /* ---------- Footer ---------- */
 .closing{margin:clamp(40px,7vw,84px) auto 0;text-align:center;padding:0 8px}
 .closing p{margin:0}
@@ -608,7 +612,8 @@ body.is-home .home-bottom{display:none}
     <section class="search" aria-label="Search recipes">
       <div class="search-box">
         <label class="visually-hidden" for="q">Search recipes</label>
-        <input id="q" type="search" placeholder="Search by recipe, ingredient, or theme" autocomplete="off">
+        <datalist id="contrib-list"></datalist>
+        <input id="q" type="search" placeholder="Search by recipe, ingredient, contributor, or theme" autocomplete="off">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.500-3.500"/></svg>
       </div>
       <fieldset class="scopes" id="scopes">
@@ -967,6 +972,8 @@ function prepare(raw){
       hay:{
         name:norm(r.name),
         section:norm(r.category),
+        contributor:norm(r.contributor),
+        contribc:norm(r.contributor).replace(/\s+/g,''),
         theme:norm(themes.concat(tags).join(' ')),
         ingredient:norm(ingText),
         all:norm([r.name,r.category,r.theme,r.tags,r.contributor,ingText,r.info].join(' '))
@@ -1068,7 +1075,7 @@ const store = {
   set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
 };
 
-const SCOPES = [['all','Everything'],['name','Recipe name'],['section','Category'],['theme','Theme'],['ingredient','Ingredient']];
+const SCOPES = [['all','Everything'],['name','Recipe name'],['contributor','Contributor'],['section','Category'],['theme','Theme'],['ingredient','Ingredient']];
 const COMMON = ['chicken','ground beef','eggs','butter','milk','cheese','onion','garlic','rice','pasta','flour','sugar','potatoes','tomatoes','heavy cream','lemon','spinach','bread','carrots','celery','sour cream','mayonnaise','bell pepper','mushrooms'];
 
 /* ---------------------------------------------------------------------
@@ -1139,7 +1146,8 @@ function matchRecipe(r, fuzzy, skipTime){
   const q = strip(state.q).replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(Boolean);
   if (!q.length) return true;
   const hay = r.hay[state.scope];
-  return q.every(t => hay.includes(t) || hay.includes(sing(t)) || (fuzzy && fuzzyHit(t, getWords(r, state.scope))));
+  const byName = state.scope==='contributor' || state.scope==='all';
+  return q.every(t => hay.includes(t) || hay.includes(sing(t)) || (byName && r.hay.contribc.includes(t)) || (byName && q.length>1 && r.hay.contribc.includes(q.join(''))) || (fuzzy && fuzzyHit(t, getWords(r, state.scope))));
 }
 
 function cardHTML(r){
@@ -1156,8 +1164,20 @@ function cardHTML(r){
 }
 
 let currentHits = [];
+function contributorNames(){
+  const set = new Map();
+  for (const r of RECIPES) for (const n of String(r.contributor||'').split(/[;,]| and /i)){ const t=n.trim(); if (t && !set.has(strip(t))) set.set(strip(t),t); }
+  return [...set.values()].sort((a,b)=>a.localeCompare(b));
+}
+function syncContribList(){
+  const q = $('#q');
+  if (state.scope==='contributor'){
+    $('#contrib-list').innerHTML = contributorNames().map(n=>`<option value="${esc(n)}">`).join('');
+    q.setAttribute('list','contrib-list');
+  } else q.removeAttribute('list');
+}
 function renderResults(){
-  renderPills(); renderFilters();
+  renderPills(); renderFilters(); syncContribList();
   let hits = RECIPES.filter(r=>matchRecipe(r,false,false));
   state.fuzzy = false;
   if (!hits.length && state.q){
@@ -1216,7 +1236,13 @@ function wireBrowse(){
     state.shown=CONFIG.PAGE_SIZE; renderResults();
   });
   document.addEventListener('click', e=>{
-    if (e.target.closest('.home-btn')){ state.q='';state.cat='';state.theme='';state.occasion='';state.time=0;state.diet=new Set();state.shown=CONFIG.PAGE_SIZE; $('#q').value=''; }
+    const cl = e.target.closest('[data-contrib]');
+    if (cl){
+      state.q = cl.dataset.contrib; state.scope = 'contributor'; state.cat=''; state.theme=''; state.occasion=''; state.time=0; state.diet=new Set(); state.shown=CONFIG.PAGE_SIZE;
+      $('#q').value = state.q; const rb = document.querySelector('input[name="scope"][value="contributor"]'); if (rb) rb.checked = true;
+      return;
+    }
+    if (e.target.closest('.home-btn')){ state.scope='all'; const ra=document.querySelector('input[name="scope"][value="all"]'); if (ra) ra.checked=true; state.q='';state.cat='';state.theme='';state.occasion='';state.time=0;state.diet=new Set();state.shown=CONFIG.PAGE_SIZE; $('#q').value=''; }
   });
   $('#size-down').addEventListener('click', ()=>setSize(sizeIdx-1));
   $('#size-up').addEventListener('click', ()=>setSize(sizeIdx+1));
@@ -1416,7 +1442,7 @@ function renderRecipe(id){
     <header class="recipe-head">
       <p class="cat">${esc(r.category||'Recipe')}</p>
       <h2>${esc(r.name)}</h2>
-      ${r.contributor?`<p class="from">from ${esc(r.contributor)}</p>`:''}
+      ${r.contributor?`<p class="from">from ${String(r.contributor).split(/([;,]|\band\b)/i).map(part=>/^([;,]|and)$/i.test(part)?(part.trim()===','||part.trim()===';'?', ':' and '):`<a class="contrib-link" href="#/" data-contrib="${esc(part.trim())}">${esc(part.trim())}</a>`).join('')}</p>`:''}
       ${r.themes.length?`<div class="chips">${r.themes.map(t=>`<span class="chip static small">${esc(t)}</span>`).join('')}</div>`:''}
       ${dietChipsHTML(r)}
     </header>
