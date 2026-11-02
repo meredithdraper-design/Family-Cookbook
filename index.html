@@ -347,7 +347,6 @@ ol.steps li::before{
 }
 
 /* ---------- Text size, filters, forms, notes, cook mode ---------- */
-.sheet > .toolbar{position:absolute;top:14px;right:16px;z-index:5;display:flex;gap:6px}
 .toolbar button{
   font-family:var(--display);font-weight:700;font-size:.95rem;min-width:2.5rem;min-height:2.5rem;padding:0 .5rem;cursor:pointer;
   color:var(--ink);background:rgba(255,250,240,.8);border:1.5px solid var(--ink);
@@ -469,9 +468,30 @@ details.fold summary::-webkit-details-marker{display:none}
 .plan-sum{margin:0 0 4px;text-align:center;color:var(--ink-soft)}
 
 @media (max-width:760px){
-  .sheet > .toolbar{position:static;justify-content:flex-end;margin:-6px 0 6px}
   .fact{flex:1 1 90px}
 }
+
+/* ---------- Return-home plaque (rosemary) ---------- */
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:-6px 0 4px}
+.toolbar{display:flex;gap:6px}
+.home-btn{
+  display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);
+  font-family:var(--display);font-weight:700;font-size:.86rem;letter-spacing:.09em;text-transform:uppercase;white-space:nowrap;
+  min-height:2.5rem;padding:.25rem .9rem;border:1.5px solid var(--ink);
+  background-color:var(--card);background-image:url("images/parchment-texture.jpg");background-size:560px 560px;background-blend-mode:multiply;
+  box-shadow:inset 0 0 0 3px var(--card),inset 0 0 0 4px var(--rule);
+  transition:background-color .15s,color .15s;
+}
+.home-btn .rs{width:clamp(40px,8vw,84px);height:auto;aspect-ratio:120/36;color:var(--olive);flex:none;transition:color .15s}
+.home-btn .rs.flip{transform:scaleX(-1)}
+.home-btn:hover{background-color:var(--ink);color:var(--paper-light);box-shadow:inset 0 0 0 3px var(--ink),inset 0 0 0 4px rgba(248,238,216,.45)}
+.home-btn:hover .rs{color:#c9d29c}
+.home-bottom{text-align:center;margin-top:clamp(30px,5vw,56px)}
+.home-bottom .home-btn{font-size:1rem;min-height:3.1rem;padding:.35rem 1.3rem;gap:14px}
+.home-bottom .home-btn .rs{width:clamp(48px,10vw,104px)}
+body.is-home .topbar .home-btn{visibility:hidden}
+body.is-home .home-bottom{display:none}
+@media (max-width:520px){.home-btn{font-size:.74rem;gap:6px;padding:.2rem .6rem}.home-btn .rs{width:38px}.home-bottom .home-btn{font-size:.9rem;padding:.3rem .8rem;gap:8px}.home-bottom .home-btn .rs{width:46px}}
 
 /* ---------- Footer ---------- */
 .closing{margin:clamp(40px,7vw,84px) auto 0;text-align:center;padding:0 8px}
@@ -530,6 +550,12 @@ details.fold summary::-webkit-details-marker{display:none}
         <ellipse cx="141" cy="20" rx="9" ry="3.2"/>
       </g>
     </symbol>
+    <symbol id="rosemary-sym" viewBox="0 0 120 36">
+      <g fill="none" stroke="currentColor" stroke-linecap="round">
+        <path d="M116 18 Q62 15.6 6 18" stroke-width="2"/>
+        <path d="M108.0 18.0 l-12.6 -7.2 M108.0 18.0 l-12.6 7.2 M101.2 17.7 l-12.1 -7.1 M101.2 17.7 l-12.1 7.1 M94.5 17.4 l-11.6 -6.9 M94.5 17.4 l-11.6 6.9 M87.7 17.2 l-11.1 -6.8 M87.7 17.2 l-11.1 6.8 M80.9 17.0 l-10.6 -6.6 M80.9 17.0 l-10.6 6.6 M74.2 16.9 l-10.1 -6.4 M74.2 16.9 l-10.1 6.4 M67.4 16.8 l-9.7 -6.2 M67.4 16.8 l-9.7 6.2 M60.6 16.8 l-9.2 -6.0 M60.6 16.8 l-9.2 6.0 M53.8 16.9 l-8.7 -5.8 M53.8 16.9 l-8.7 5.8 M47.1 17.0 l-8.3 -5.6 M47.1 17.0 l-8.3 5.6 M40.3 17.2 l-7.8 -5.4 M40.3 17.2 l-7.8 5.4 M33.5 17.4 l-7.4 -5.2 M33.5 17.4 l-7.4 5.2 M26.8 17.7 l-6.9 -4.9 M26.8 17.7 l-6.9 4.9 M20.0 18.0 l-6.5 -4.7 M20.0 18.0 l-6.5 4.7 M20 17.2 l-12 0" stroke-width="2.3"/>
+      </g>
+    </symbol>
     <symbol id="heart-sym" viewBox="0 0 24 24"><path fill="currentColor" d="M12 21C5 16 2 12.3 2 8.6 2 5.9 4 4 6.5 4c2.2 0 4.1 1.4 5.5 3.6C13.400 5.400 15.300 4 17.500 4 20 4 22 5.900 22 8.600 22 12.300 19 16 12 21z"/></symbol>
   </defs>
 </svg>
@@ -544,9 +570,16 @@ details.fold summary::-webkit-details-marker{display:none}
     <img class="d-br" src="images/motif-olive.png" alt="" width="269" height="324">
   </div>
 
-  <div class="toolbar no-print" role="group" aria-label="Text size">
-    <button type="button" id="size-down" aria-label="Smaller text">A&minus;</button>
-    <button type="button" id="size-up" aria-label="Larger text">A+</button>
+  <div class="topbar no-print">
+    <a class="home-btn" href="#/" aria-label="Return to the home page">
+      <svg class="rs" viewBox="0 0 120 36" aria-hidden="true"><use href="#rosemary-sym"/></svg>
+      <span>Return Home</span>
+      <svg class="rs flip" viewBox="0 0 120 36" aria-hidden="true"><use href="#rosemary-sym"/></svg>
+    </a>
+    <div class="toolbar" role="group" aria-label="Text size">
+      <button type="button" id="size-down" aria-label="Smaller text">A&minus;</button>
+      <button type="button" id="size-up" aria-label="Larger text">A+</button>
+    </div>
   </div>
 
   <header class="masthead">
@@ -688,6 +721,14 @@ details.fold summary::-webkit-details-marker{display:none}
 
   <!-- ====================== RECIPE ====================== -->
   <main id="view-recipe" hidden></main>
+
+  <div class="home-bottom no-print">
+    <a class="home-btn" href="#/" aria-label="Return to the home page">
+      <svg class="rs" viewBox="0 0 120 36" aria-hidden="true"><use href="#rosemary-sym"/></svg>
+      <span>Return Home</span>
+      <svg class="rs flip" viewBox="0 0 120 36" aria-hidden="true"><use href="#rosemary-sym"/></svg>
+    </a>
+  </div>
 
   <footer class="closing no-print">
     <div class="orn rule" aria-hidden="true"><svg class="heart"><use href="#heart-sym"/></svg></div>
@@ -1173,6 +1214,9 @@ function wireBrowse(){
     else if (o){ const v=o.dataset.occ; state.occasion = strip(state.occasion)===strip(v)?'':v; }
     else return;
     state.shown=CONFIG.PAGE_SIZE; renderResults();
+  });
+  document.addEventListener('click', e=>{
+    if (e.target.closest('.home-btn')){ state.q='';state.cat='';state.theme='';state.occasion='';state.time=0;state.diet=new Set();state.shown=CONFIG.PAGE_SIZE; $('#q').value=''; }
   });
   $('#size-down').addEventListener('click', ()=>setSize(sizeIdx-1));
   $('#size-up').addEventListener('click', ()=>setSize(sizeIdx+1));
@@ -2180,6 +2224,7 @@ function route(){
   if (tab==='kitchen') $('#tab-kitchen').setAttribute('aria-current','page'); else $('#tab-kitchen').removeAttribute('aria-current');
   if (tab==='menu') $('#tab-menu').setAttribute('aria-current','page'); else $('#tab-menu').removeAttribute('aria-current');
   if (tab==='add') $('#tab-add').setAttribute('aria-current','page'); else $('#tab-add').removeAttribute('aria-current');
+  document.body.classList.toggle('is-home', tab==='browse');
   const st=$('#status'); st.style.display = m ? 'none' : '';
   window.scrollTo(0,0);
 }
