@@ -498,7 +498,8 @@ body.is-home .home-bottom{display:none}
 @media print{.recipe-head .from .contrib-link{text-decoration:none}}
 
 .card .fav-tag{position:absolute;top:10px;right:14px;font-size:.82rem;color:var(--amber);font-weight:500;letter-spacing:.02em}
-.recipe-head .fav-line{margin:2px 0 0;color:var(--amber);font-size:1.02rem;letter-spacing:.04em}
+.recipe-head .fav-line{margin:6px 0 2px;color:var(--amber);font-family:var(--display);font-weight:700;font-size:clamp(1.1rem,2.6vw,1.45rem);letter-spacing:.09em}
+.recipe-head .fav-line .h{font-size:1.45em;line-height:1;vertical-align:-.1em;margin:0 .28em}
 
 /* ---------- Footer ---------- */
 .closing{margin:clamp(40px,7vw,84px) auto 0;text-align:center;padding:0 8px}
@@ -1449,7 +1450,7 @@ function renderRecipe(id){
     <div class="print-head">Draper &amp; Willis Family Recipes</div>
     <header class="recipe-head">
       <p class="cat">${esc(r.category||'Recipe')}</p>
-      ${r.fav?'<p class="fav-line">&hearts; A family favorite</p>':''}
+      ${r.fav?'<p class="fav-line"><span class="h">&hearts;</span> A Family Favorite <span class="h">&hearts;</span></p>':''}
       <h2>${esc(r.name)}</h2>
       ${r.contributor?`<p class="from">from ${String(r.contributor).split(/([;,]|\band\b)/i).map(part=>/^([;,]|and)$/i.test(part)?(part.trim()===','||part.trim()===';'?', ':' and '):`<a class="contrib-link" href="#/" data-contrib="${esc(part.trim())}">${esc(part.trim())}</a>`).join('')}</p>`:''}
       ${r.themes.length?`<div class="chips">${r.themes.map(t=>`<span class="chip static small">${esc(t)}</span>`).join('')}</div>`:''}
