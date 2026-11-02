@@ -617,12 +617,13 @@ body.is-home .home-bottom{display:none}
       <div class="search-box">
         <label class="visually-hidden" for="q">Search recipes</label>
         <datalist id="contrib-list"></datalist>
-        <input id="q" type="search" placeholder="Search by recipe, ingredient, contributor, or theme" autocomplete="off">
+        <input id="q" type="search" placeholder="Search by recipe, ingredient, contributor, theme, or anything else" autocomplete="off">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.500-3.500"/></svg>
       </div>
       <fieldset class="scopes" id="scopes">
         <legend>look in</legend>
       </fieldset>
+      <p class="hint">&ldquo;Everything&rdquo; searches names, ingredients, directions, notes, contributors, themes, tags, and more.</p>
     </section>
 
     <details class="filters" id="filters">
@@ -639,10 +640,6 @@ body.is-home .home-bottom{display:none}
       <button class="btn" id="surprise-kitchen" type="button" hidden>Surprise me from my kitchen</button>
     </div>
 
-    <section class="block" id="theme-block" aria-labelledby="theme-h" hidden>
-      <h2 class="sec" id="theme-h">Themes</h2>
-      <div class="chips" id="theme-chips"></div>
-    </section>
 
     <section class="block" id="tiles-block" aria-labelledby="tiles-h">
       <h2 class="sec" id="tiles-h">Recipe Categories</h2>
@@ -971,6 +968,8 @@ function prepare(raw){
     const themes = list(r.theme), tags = list(r.tags);
     const ings = analyzeIngredients(r.ingredients);
     const ingText = r.ingredients.join(' ');
+    const dirText = r.directions.join(' ');
+    const dietText = [...dietSet(r,ingText)].map(k=>DIET_LABELS[k]||k).join(' ')+' '+(r.dietary||'');
     const norm = s => strip(s).replace(/[^a-z0-9\s]/g,' ');
     return Object.assign({}, r, {
       id, themes, tagList:tags, ings, occasions:list(r.occasion), mins:totalMins(r), dietSet:dietSet(r,ingText), dietAuto:!list(r.dietary).length,
@@ -980,9 +979,10 @@ function prepare(raw){
         section:norm(r.category+(r.fav?' '+FAV_CATEGORY+' favorite':'')),
         contributor:norm(r.contributor),
         contribc:norm(r.contributor).replace(/\s+/g,''),
-        theme:norm(themes.concat(tags).join(' ')),
+        theme:norm(themes.concat(tags, list(r.occasion)).join(' ')+' '+dietText),
         ingredient:norm(ingText),
-        all:norm([r.name,r.category,r.theme,r.tags,r.contributor,ingText,r.info].join(' '))
+        body:norm(dirText+' '+r.info),
+        all:norm([r.name,r.category,(r.fav?'family favorite '+FAV_CATEGORY:''),r.theme,r.occasion,r.tags,dietText,r.contributor,r.servings,r.prep,r.cook,ingText,dirText,r.info].join(' '))
       }
     });
   });
@@ -1081,7 +1081,7 @@ const store = {
   set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
 };
 
-const SCOPES = [['all','Everything'],['name','Recipe name'],['contributor','Contributor'],['section','Category'],['theme','Theme'],['ingredient','Ingredient']];
+const SCOPES = [['all','Everything'],['name','Recipe name'],['contributor','Contributor'],['section','Category'],['theme','Theme & tags'],['ingredient','Ingredient']];
 const COMMON = ['chicken','ground beef','eggs','butter','milk','cheese','onion','garlic','rice','pasta','flour','sugar','potatoes','tomatoes','heavy cream','lemon','spinach','bread','carrots','celery','sour cream','mayonnaise','bell pepper','mushrooms'];
 
 /* ---------------------------------------------------------------------
@@ -1113,14 +1113,6 @@ function renderTiles(){
   }).join('');
 }
 
-function renderThemes(){
-  const map = new Map();
-  for (const r of RECIPES) for (const t of r.themes){ const k=strip(t); if(!map.has(k)) map.set(k,t); }
-  const themes=[...map.values()].sort((a,b)=>a.localeCompare(b));
-  $('#theme-block').hidden = !themes.length;
-  $('#theme-chips').innerHTML = themes.map(t=>`<button class="chip" data-theme="${esc(t)}" aria-pressed="${strip(t)===strip(state.theme)}">${esc(t)}</button>`).join('');
-}
-
 function filtersActive(){ return !!(state.time || state.diet.size || state.occasion); }
 function anyActive(){ return !!(state.q || state.cat || state.theme || filtersActive()); }
 
@@ -1145,17 +1137,55 @@ function renderFilters(){
   $('#surprise-kitchen').hidden = !pantry.length;
 }
 
-function matchRecipe(r, fuzzy, skipTime){
+/* Words that mean the same thing, so a search finds more. */
+const SYN = {
+  crockpot:['crock pot','slow cooker'], crock:['slow cooker'], slow:[], instapot:['instant pot','pressure cooker'], 'instantpot':['instant pot'],
+  veggie:['vegetable'], veggies:['vegetable'], veg:['vegetable'], bbq:['barbecue'], barbecue:['bbq'], chilli:['chili'], chile:['chili'], chiles:['chili'],
+  garbanzo:['chickpea'], chickpea:['garbanzo'], coriander:['cilantro'], cilantro:['coriander'], scallion:['green onion'], scallions:['green onion'],
+  yoghurt:['yogurt'], doughnut:['donut'], donut:['doughnut'], eggplant:['aubergine'], aubergine:['eggplant'], zucchini:['courgette'], courgette:['zucchini'],
+  shrimp:['prawn'], prawn:['shrimp'], hamburger:['ground beef'], mince:['ground'], icing:['frosting'], frosting:['icing'], biscuit:['scone'],
+  noodle:['pasta'], pasta:['noodle'], dessert:['sweet','cake','pie','cookie','pudding'], sweets:['dessert'], snack:['appetizer','dip'], appetizer:['snack','dip'],
+  breakfast:['brunch'], brunch:['breakfast'], supper:['dinner'], dinner:['supper','main dish'], holiday:['christmas','thanksgiving'], xmas:['christmas']
+};
+function qTokens(){ return strip(state.q).replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(Boolean); }
+function hitIn(hay,t){ return hay.includes(t) || hay.includes(sing(t)); }
+function tokenHit(r, t, scope, fuzzy){
+  const hay = r.hay[scope];
+  const alts = [t].concat(SYN[t]||[], SYN[sing(t)]||[]);
+  if (alts.some(a=>hitIn(hay,a))) return true;
+  if ((scope==='contributor' || scope==='all') && r.hay.contribc.includes(t)) return true;
+  return !!fuzzy && fuzzyHit(t, getWords(r, scope));
+}
+function passFilters(r, skipTime){
   if (state.cat && !inCategory(r,state.cat)) return false;
   if (state.theme && !r.themes.some(t=>strip(t)===strip(state.theme))) return false;
   if (state.occasion && !r.occasions.some(o=>strip(o)===strip(state.occasion))) return false;
   for (const d of state.diet) if (!r.dietSet.has(d)) return false;
   if (!skipTime && state.time && !(r.mins!=null && r.mins<=state.time)) return false;
-  const q = strip(state.q).replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(Boolean);
+  return true;
+}
+function matchRecipe(r, fuzzy, skipTime){
+  if (!passFilters(r, skipTime)) return false;
+  const q = qTokens();
   if (!q.length) return true;
-  const hay = r.hay[state.scope];
-  const byName = state.scope==='contributor' || state.scope==='all';
-  return q.every(t => hay.includes(t) || hay.includes(sing(t)) || (byName && r.hay.contribc.includes(t)) || (byName && q.length>1 && r.hay.contribc.includes(q.join(''))) || (fuzzy && fuzzyHit(t, getWords(r, state.scope))));
+  if ((state.scope==='contributor' || state.scope==='all') && q.length>1 && r.hay.contribc.includes(q.join(''))) return true;
+  return q.every(t => tokenHit(r, t, state.scope, fuzzy));
+}
+/* Higher score = closer match: a name match beats a mention in the directions. */
+function relevance(r){
+  const q = qTokens(); let sc = 0;
+  for (const t of q){
+    const alts = [t, sing(t)].concat(SYN[t]||[]);
+    const has = hay => alts.some(a=>hay.includes(a));
+    if (has(r.hay.name)) sc += 10;
+    if (has(r.hay.contributor) || r.hay.contribc.includes(t)) sc += 6;
+    if (has(r.hay.theme)) sc += 5;
+    if (has(r.hay.section)) sc += 4;
+    if (has(r.hay.ingredient)) sc += 3;
+    if (has(r.hay.body)) sc += 1;
+  }
+  if (q.length>1 && r.hay.name.includes(q.join(' '))) sc += 8;
+  return sc;
 }
 
 function cardHTML(r){
@@ -1193,7 +1223,16 @@ function renderResults(){
     const close = RECIPES.filter(r=>matchRecipe(r,true,false));
     if (close.length){ hits = close; state.fuzzy = true; }
   }
-  hits.sort((a,b)=>a.name.localeCompare(b.name));
+  state.anyWords = false;
+  if (!hits.length && state.q){
+    const toks = qTokens();
+    if (toks.length>1){
+      const some = RECIPES.filter(r=>passFilters(r,false) && toks.some(t=>tokenHit(r,t,state.scope,true)));
+      if (some.length){ hits = some; state.anyWords = true; }
+    }
+  }
+  if (state.q) hits.sort((a,b)=>relevance(b)-relevance(a) || a.name.localeCompare(b.name));
+  else hits.sort((a,b)=>a.name.localeCompare(b.name));
   currentHits = hits;
   const active = anyActive();
   const bits=[];
@@ -1205,6 +1244,7 @@ function renderResults(){
   if (state.q) bits.push('matching \u201C'+state.q+'\u201D');
   let text = plural(hits.length,'recipe')+(bits.length?' '+bits.join(', '):'');
   if (state.fuzzy) text += '. No exact match, so these are the closest spellings.';
+  if (state.anyWords) text += '. No recipe has all of those words, so these match some of them.';
   if (state.time){
     const hidden = RECIPES.filter(r=>r.mins==null && matchRecipe(r,state.fuzzy,true)).length;
     if (hidden) text += ' ('+plural(hidden,'recipe')+' with no listed time not shown.)';
@@ -1213,9 +1253,8 @@ function renderResults(){
   $('#clear').hidden = !active;
   const shown = hits.slice(0,state.shown);
   $('#cards').innerHTML = shown.length ? shown.map(cardHTML).join('')
-    : `<p class="empty" style="grid-column:1/-1">No recipes found. Try fewer words or filters, or switch &ldquo;look in&rdquo; to Everything.</p>`;
+    : `<p class="empty" style="grid-column:1/-1">No recipes found. Try fewer words or fewer filters, or switch &ldquo;look in&rdquo; to Everything.</p>`;
   $('#more').hidden = hits.length<=state.shown;
-  renderThemes();
 }
 
 function surprise(fromKitchen){
