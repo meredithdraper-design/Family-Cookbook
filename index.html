@@ -497,6 +497,9 @@ body.is-home .home-bottom{display:none}
 .recipe-head .from .contrib-link:hover{color:var(--olive-deep)}
 @media print{.recipe-head .from .contrib-link{text-decoration:none}}
 
+.card .fav-tag{position:absolute;top:10px;right:14px;font-size:.82rem;color:var(--amber);font-weight:500;letter-spacing:.02em}
+.recipe-head .fav-line{margin:2px 0 0;color:var(--amber);font-size:1.02rem;letter-spacing:.04em}
+
 /* ---------- Footer ---------- */
 .closing{margin:clamp(40px,7vw,84px) auto 0;text-align:center;padding:0 8px}
 .closing p{margin:0}
@@ -931,6 +934,7 @@ const ALIASES = {
   occasion:['occasion','occasions'],
   dietary:['dietary','diet'],
   showOriginal:['showoriginal','originalcard'],
+  favorite:['familyfavorite','favorite','favorites','favourite'],
   rid:['recipeid','id'],
   status:['status']
 };
@@ -951,7 +955,8 @@ function fromRows(rows){
       ingredients:lines(get(r,'ingredients')), directions:lines(get(r,'directions')).map(s=>s.replace(/^\d+[\.\)]\s*/,'')),
       info:get(r,'info'), pdf:get(r,'pdf'),
       occasion:get(r,'occasion'), dietary:get(r,'dietary'), showOriginal:strip(get(r,'showOriginal')),
-      rid:get(r,'rid'), unchecked:status.startsWith('published')
+      rid:get(r,'rid'), unchecked:status.startsWith('published'),
+      fav:/^(true|yes|y|x|1|\u2713|\u2714|checked)$/i.test(get(r,'favorite'))
     });
   }
   return out;
@@ -971,7 +976,7 @@ function prepare(raw){
       _words:{},
       hay:{
         name:norm(r.name),
-        section:norm(r.category),
+        section:norm(r.category+(r.fav?' '+FAV_CATEGORY+' favorite':'')),
         contributor:norm(r.contributor),
         contribc:norm(r.contributor).replace(/\s+/g,''),
         theme:norm(themes.concat(tags).join(' ')),
@@ -1085,7 +1090,9 @@ const SPRIG = '<svg class="sprig" viewBox="0 0 150 40"><use href="#sprig-sym"/><
 const SPRIG_FLIP = '<svg class="sprig flip" viewBox="0 0 150 40"><use href="#sprig-sym"/></svg>';
 const HEART = '<svg class="heart"><use href="#heart-sym"/></svg>';
 
-function catCount(name){ return RECIPES.filter(r=>strip(r.category)===strip(name)).length; }
+const FAV_CATEGORY = 'Notes & Family Favorites';
+function inCategory(r,name){ return strip(r.category)===strip(name) || (!!r.fav && strip(name)===strip(FAV_CATEGORY)); }
+function catCount(name){ return RECIPES.filter(r=>inCategory(r,name)).length; }
 const plural = (n,w)=> n+' '+w+(n===1?'':'s');
 
 function buildScopes(){
@@ -1138,7 +1145,7 @@ function renderFilters(){
 }
 
 function matchRecipe(r, fuzzy, skipTime){
-  if (state.cat && strip(r.category)!==strip(state.cat)) return false;
+  if (state.cat && !inCategory(r,state.cat)) return false;
   if (state.theme && !r.themes.some(t=>strip(t)===strip(state.theme))) return false;
   if (state.occasion && !r.occasions.some(o=>strip(o)===strip(state.occasion))) return false;
   for (const d of state.diet) if (!r.dietSet.has(d)) return false;
@@ -1155,6 +1162,7 @@ function cardHTML(r){
   const serv = r.servings ? 'Serves '+r.servings : '';
   const meta = [serv].concat(time).filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join('');
   return `<a class="card" href="#/recipe/${esc(r.id)}">
+    ${r.fav?'<span class="fav-tag" title="Family favorite">&hearts; Family favorite</span>':''}
     <span class="cat">${esc(r.category||'Recipe')}</span>
     <h3>${esc(r.name)}</h3>
     ${r.contributor?`<span class="from">from ${esc(r.contributor)}</span>`:''}
@@ -1441,6 +1449,7 @@ function renderRecipe(id){
     <div class="print-head">Draper &amp; Willis Family Recipes</div>
     <header class="recipe-head">
       <p class="cat">${esc(r.category||'Recipe')}</p>
+      ${r.fav?'<p class="fav-line">&hearts; A family favorite</p>':''}
       <h2>${esc(r.name)}</h2>
       ${r.contributor?`<p class="from">from ${String(r.contributor).split(/([;,]|\band\b)/i).map(part=>/^([;,]|and)$/i.test(part)?(part.trim()===','||part.trim()===';'?', ':' and '):`<a class="contrib-link" href="#/" data-contrib="${esc(part.trim())}">${esc(part.trim())}</a>`).join('')}</p>`:''}
       ${r.themes.length?`<div class="chips">${r.themes.map(t=>`<span class="chip static small">${esc(t)}</span>`).join('')}</div>`:''}
