@@ -375,6 +375,9 @@ ol.steps li::before{
 .field input[type=file]{font:inherit;padding:.5rem 0}
 .field .help{font-size:.92rem;color:var(--ink-soft)}
 .hp{position:absolute!important;left:-9999px;width:1px;height:1px;overflow:hidden}
+.field,.formbox,.note-form{min-width:0}
+.field input,.field select,.field textarea{max-width:100%;min-width:0;box-sizing:border-box}
+.field input[type=file]{width:100%;overflow:hidden}
 .formbox{max-width:640px;margin:0 auto}
 .msg{margin:12px 0 0;min-height:1.5em}
 .msg.err{color:#7a2415}
@@ -472,7 +475,15 @@ details.fold summary::-webkit-details-marker{display:none}
 }
 
 /* ---------- Return-home plaque (rosemary) ---------- */
-.topbar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:-6px 0 4px}
+.topbar{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin:-6px 0 4px}
+.topbar .home-btn{grid-column:2;justify-self:center}
+.topbar .toolbar{grid-column:3;justify-self:end}
+@media (max-width:700px){
+.topbar{grid-template-columns:1fr;justify-items:center;gap:8px}
+.topbar .home-btn{grid-column:1;grid-row:1}
+.topbar .toolbar{grid-column:1;grid-row:2;justify-self:center}
+body.is-home .topbar .home-btn{display:none}
+}
 .toolbar{display:flex;gap:6px}
 .home-btn{
   display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);
