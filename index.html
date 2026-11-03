@@ -764,11 +764,13 @@ const CONFIG = {
   WEB_APP_URL: 'https://script.google.com/macros/s/AKfycbyIpxu0Avol98lCp-3hub-WTkjOvapDgsReit-JLgLmvrrnNTfmPH67QPPTucz3qbZi/exec',
   PAGE_SIZE: 24,
   /* Recipe music. Greek, Italian, and Christmas/holiday recipes play a short (about 15 second) original tune that the
-     browser makes by itself. Tex-Mex and Mexican recipes play a recording (audio/mariachi.mp3) of an original mariachi
-     arrangement made with recorded instruments; if that file is missing, the built-in tune plays instead. To use your own
-     licensed or royalty-free recordings, upload the audio files to the repository and put their paths here, for example
-     greek: 'audio/greek.mp3'. volume is 0 to 1; seconds is how long a recording plays before it fades out. */
-  MUSIC: {greek:'', italian:'', texmex:'audio/mariachi.mp3', holiday:'', volume:0.6, seconds:16}
+     browser makes by itself. Tex-Mex and Mexican recipes play a recording of an original mariachi arrangement made with
+     recorded instruments (audio/mariachi.mp3). To use your own licensed or royalty-free recordings, upload the audio
+     files to the repository and put their paths here, for example greek: 'audio/greek.mp3'.
+     volume: 0 is silent and 1 is full strength. 0.22 is quiet background music; try 0.15 for even softer, or 0.35 for louder.
+     seconds: how long each tune plays before it fades out.
+     The ?v=2 after a file name makes browsers fetch the newest copy. If you ever replace a recording, change it to ?v=3, and so on. */
+  MUSIC: {greek:'', italian:'', texmex:'audio/mariachi.mp3?v=2', holiday:'', volume:0.22, seconds:16}
 };
 
 /* Recipe categories, in binder order. Edit the taglines freely. */
@@ -2714,7 +2716,16 @@ const Music = (()=>{
     if (w){ w.postMessage(style); return; }
     setTimeout(()=>{ cache[style] = synth.render(style); const l = waiters[style]; waiters[style] = []; l.forEach(f=>f()); }, 0);
   }
-  function prerender(){ STYLES.forEach(k=>{ if (!cache[k]) ensureClip(k, ()=>{}); }); }
+  const fileBuf = {}, fileTry = {};
+  function loadFile(url){
+    return fetch(url).then(r=>{ if (!r.ok) throw new Error('missing'); return r.arrayBuffer(); })
+      .then(ab=>new Promise((res,rej)=>ctx.decodeAudioData(ab,res,rej))).then(b=>(fileBuf[url]=b));
+  }
+  function preloadFiles(){
+    if (!ctx || typeof CONFIG==='undefined' || !CONFIG.MUSIC) return;
+    Object.keys(CONFIG.MUSIC).forEach(k=>{ const u = CONFIG.MUSIC[k]; if (typeof u==='string' && u && !fileBuf[u] && !fileTry[u]){ fileTry[u] = 1; loadFile(u).catch(()=>{}); } });
+  }
+  function prerender(){ STYLES.forEach(k=>{ if (!cache[k]) ensureClip(k, ()=>{}); }); preloadFiles(); }
   function unlock(){          // call from a tap or key press so the browser allows sound later
     if (!enabled) return;
     if (ctx && ctx.state==='running'){ prerender(); return; }
@@ -2723,7 +2734,7 @@ const Music = (()=>{
     try{ const b=c.createBuffer(1,1,SR), s=c.createBufferSource(); s.buffer=b; s.connect(c.destination); s.start(0); }catch(e){}
     prerender();
   }
-  function vol(){ const v = (typeof CONFIG!=='undefined' && CONFIG.MUSIC && CONFIG.MUSIC.volume); return typeof v==='number' ? v : 0.6; }
+  function vol(){ const v = (typeof CONFIG!=='undefined' && CONFIG.MUSIC && CONFIG.MUSIC.volume); return typeof v==='number' ? v : 0.22; }
   function secs(){ const v = (typeof CONFIG!=='undefined' && CONFIG.MUSIC && CONFIG.MUSIC.seconds); return typeof v==='number' ? v : 15; }
 
   function stop(fast){
@@ -2735,19 +2746,43 @@ const Music = (()=>{
     }
     if (playing){
       const p = playing; playing = null;
-      try{ p.g.gain.setTargetAtTime(0, ctx.currentTime, fast?0.03:0.2); setTimeout(()=>{ try{p.src.stop();}catch(e){} }, fast?160:900); }catch(e){}
+      try{ const gp = p.g.gain, now = ctx.currentTime, cur = gp.value; gp.cancelScheduledValues(now); gp.setValueAtTime(cur, now); gp.setTargetAtTime(0, now, fast?0.03:0.2); setTimeout(()=>{ try{p.src.stop();}catch(e){} }, fast?160:900); }catch(e){}
     }
   }
-  function playFile(url, style){
+  /* One player for everything: starts softly, fades out at the end, and obeys the volume setting on every device. */
+  function startBuffer(c, buf, maxSecs){
+    const src = c.createBufferSource(); src.buffer = buf;
+    const g = c.createGain(), now = c.currentTime, v = vol(), dur = Math.min(buf.duration, maxSecs || buf.duration), fi = 1.4, fo = 1.4;
+    g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime(v, now+fi);
+    if (dur > fi+fo+0.2){ g.gain.setValueAtTime(v, now+dur-fo); g.gain.linearRampToValueAtTime(0, now+dur); }
+    src.connect(g); g.connect(c.destination); src.start(now, 0, dur);
+    const me = {src, g}; playing = me;
+    src.onended = ()=>{ if (playing===me) playing = null; };
+  }
+  /* Last resort (very old browsers): a plain audio tag. Some phones ignore its volume. */
+  function playFileTag(url, style){
     try{
       const a = new Audio(url); a.volume = vol(); htmlAudio = a;
-      const fallback = ()=>{ if (htmlAudio===a){ htmlAudio = null; playSynth(style); } };      // file missing or unreadable: use the built-in tune
+      const fallback = ()=>{ if (htmlAudio===a){ htmlAudio = null; playSynth(style); } };
       a.addEventListener('error', fallback, {once:true});
       a.play().then(()=>{ if (htmlAudio===a) fileTimer = setTimeout(()=>stop(false), secs()*1000); })
         .catch(err=>{ if (err && err.name==='NotSupportedError') fallback(); else if (htmlAudio===a) htmlAudio = null; });
     }catch(e){ htmlAudio = null; }
   }
+  function playFile(url, style){
+    const c = ensureCtx();
+    if (!c) return playFileTag(url, style);
+    const my = ++token;
+    const go = ()=>{
+      if (my!==token || c.state!=='running') return;
+      const begin = b=>{ if (my===token && c.state==='running') startBuffer(c, b, secs()); };
+      if (fileBuf[url]) return begin(fileBuf[url]);
+      loadFile(url).then(begin).catch(()=>{ if (my===token) playFileTag(url, style); });
+    };
+    if (c.state==='running') go(); else c.resume().then(go).catch(()=>{});
+  }
   function playSynth(style){
+    if (style==='texmex') return;                              // the Mexican tune is the recording only; no stand-in
     const c = ensureCtx(); if (!c) return;
     const my = ++token;
     const go = ()=>{
@@ -2756,11 +2791,7 @@ const Music = (()=>{
         if (my!==token || c.state!=='running') return;
         const clip = cache[style];
         const buf = c.createBuffer(2, clip.L.length, SR); buf.copyToChannel(clip.L, 0); buf.copyToChannel(clip.R, 1);
-        const src = c.createBufferSource(); src.buffer = buf;
-        const g = c.createGain(); g.gain.value = vol();
-        src.connect(g); g.connect(c.destination); src.start();
-        const me = {src, g}; playing = me;
-        src.onended = ()=>{ if (playing===me) playing = null; };
+        startBuffer(c, buf, secs());
       });
     };
     if (c.state==='running') go(); else c.resume().then(go).catch(()=>{});
@@ -2790,7 +2821,8 @@ const Music = (()=>{
     stop,
     setEnabled(on){ enabled = !!on; if (!enabled) stop(false); },
     isEnabled(){ return enabled; },
-    isPlaying(){ return !!playing || !!htmlAudio; }
+    isPlaying(){ return !!playing || !!htmlAudio; },
+    debug(){ return {playing: !!playing, tag: !!htmlAudio, gain: playing ? playing.g.gain.value : null}; }
   };
 })();
 /*MUSIC-END*/
