@@ -763,11 +763,12 @@ const CONFIG = {
      (Apps Script: Deploy > New deployment > Web app; see the README). */
   WEB_APP_URL: 'https://script.google.com/macros/s/AKfycbyIpxu0Avol98lCp-3hub-WTkjOvapDgsReit-JLgLmvrrnNTfmPH67QPPTucz3qbZi/exec',
   PAGE_SIZE: 24,
-  /* Recipe music. Greek, Italian, and Christmas/holiday recipes play a short (about 15 second) original tune that
-     the browser makes by itself. To use your own licensed or royalty-free recordings instead, upload the audio files
-     to the repository and put their paths here, for example greek: 'audio/greek.mp3'.
-     volume is 0 to 1; seconds is how long a recording plays before it fades out. */
-  MUSIC: {greek:'', italian:'', holiday:'', volume:0.6, seconds:15}
+  /* Recipe music. Greek, Italian, and Christmas/holiday recipes play a short (about 15 second) original tune that the
+     browser makes by itself. Tex-Mex and Mexican recipes play a recording (audio/mariachi.mp3) of an original mariachi
+     arrangement made with recorded instruments; if that file is missing, the built-in tune plays instead. To use your own
+     licensed or royalty-free recordings, upload the audio files to the repository and put their paths here, for example
+     greek: 'audio/greek.mp3'. volume is 0 to 1; seconds is how long a recording plays before it fades out. */
+  MUSIC: {greek:'', italian:'', texmex:'audio/mariachi.mp3', holiday:'', volume:0.6, seconds:16}
 };
 
 /* Recipe categories, in binder order. Edit the taglines freely. */
@@ -2778,8 +2779,7 @@ const Music = (()=>{
     if (/\bno music\b|\bsilent\b/.test(holi)) return '';
     if (/\bgreek\b|\bgreece\b/.test(base)) return 'greek';
     if (/\bitalian\b|\bitaly\b|\btuscan\b|\btarantella\b/.test(base)) return 'italian';
-    // Tex-Mex / Mexican music is switched off for now. To bring it back, remove the two slashes at the start of the next line.
-    // if (/\btex mex\b|\bmexican\b|\bmexico\b|\btaco\b|\btacos\b|\bnacho\b|\bnachos\b|\benchilada\b|\bfajita\b|\bburrito\b|\bquesadilla\b|\bsouthwest\b|\bsouthwestern\b/.test(base)) return 'texmex';
+    if (/\btex mex\b|\bmexican\b|\bmexico\b|\btaco\b|\btacos\b|\bnacho\b|\bnachos\b|\benchilada\b|\bfajita\b|\bburrito\b|\bquesadilla\b|\bsouthwest\b|\bsouthwestern\b/.test(base)) return 'texmex';
     if (/\bchristmas\b|\bholiday\b|\bholidays\b|\bxmas\b/.test(holi)) return 'holiday';
     return '';
   }
