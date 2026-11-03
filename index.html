@@ -763,11 +763,11 @@ const CONFIG = {
      (Apps Script: Deploy > New deployment > Web app; see the README). */
   WEB_APP_URL: 'https://script.google.com/macros/s/AKfycbyKaHxLpknWXVqfZcvHrV7Pg11WKNs4sSCmM-4RKesNBseijQ-I8_7incsIXx9fmHwO/exec',
   PAGE_SIZE: 24,
-  /* Recipe music. Greek and Italian recipes play a short (about 15 second) original folk-style tune that the
-     browser makes by itself. To use your own licensed or royalty-free recordings instead, upload the audio
-     files to the repository and put their paths here, for example greek: 'audio/greek.mp3'.
+  /* Recipe music. Greek, Italian, and Christmas/holiday recipes play a short (about 15 second) original tune that
+     the browser makes by itself. To use your own licensed or royalty-free recordings instead, upload the audio files
+     to the repository and put their paths here, for example greek: 'audio/greek.mp3'.
      volume is 0 to 1; seconds is how long a recording plays before it fades out. */
-  MUSIC: {greek:'', italian:'', volume:0.6, seconds:15}
+  MUSIC: {greek:'', italian:'', holiday:'', volume:0.6, seconds:15}
 };
 
 /* Recipe categories, in binder order. Edit the taglines freely. */
@@ -2285,143 +2285,406 @@ function wireMenu(){
 
 /*MUSIC-START*/
 /* ---------------------------------------------------------------------
-   Recipe music: short original folk-style tunes, made by the browser itself
-   (plucked-string synthesis; no audio files). Greek recipes get a
-   bouzouki-style dance that speeds up; Italian recipes get a mandolin tarantella.
+   Recipe music: short original folk-style tunes, played with the Web Audio API.
+   The browser builds the sound itself (no audio files): warm plucked strings with a
+   wooden "body", hand percussion, bells and strings, a little room reverb, in stereo.
+   Greek: bouzouki dance. Italian: mandolin tarantella. Tex-Mex/Mexican: mariachi son.
+   Holiday: celesta and bells playing the public-domain "Jingle Bells" chorus.
    --------------------------------------------------------------------- */
-const Music = (()=>{
-  const SR = 22050;
-  let ctx = null, playing = null, enabled = true, cache = {}, lastFor = '', htmlAudio = null, fileTimer = null;
+function makeSynth(){
+  const SR = 24000;
 
   const hz = m => 440*Math.pow(2,(m-69)/12);
   function rng(seed){ let s = seed>>>0; return ()=>{ s = (s*1664525+1013904223)>>>0; return s/4294967296*2-1; }; }
 
-  /* A plucked string (Karplus-Strong). Added into `out` starting at startSec. */
-  function pluck(out, startSec, midi, durSec, gain, rnd, t60){
-    const f = hz(midi), start = Math.round(startSec*SR);
-    const len = Math.min(Math.round(durSec*SR), out.length-start);
-    if (len<=0) return;
-    const total = SR/f + 0.5;                                    // the averager takes half a sample off the loop, so add it back
-    const N = Math.max(2, Math.floor(total-0.1)), d = total-N;     // whole part + a fractional part for exact tuning
-    const C = (1-d)/(1+d);
-    const rho = Math.pow(10, -3*((N+d-0.5)/SR)/(t60||1.1));
-    const buf = new Float32Array(N); let prev = 0;
-    for (let i=0;i<N;i++){ prev = 0.55*rnd()+0.45*prev; buf[i] = prev; }        // warm, slightly rounded pick
+  /* ---------- filters (standard biquads) ---------- */
+  function biquad(x, type, f, Q, gDb){
+    const w0 = 2*Math.PI*f/SR, cs = Math.cos(w0), sn = Math.sin(w0), al = sn/(2*(Q||0.707));
+    let b0,b1,b2,a0,a1,a2;
+    if (type==='lp'){ b0=(1-cs)/2; b1=1-cs; b2=b0; a0=1+al; a1=-2*cs; a2=1-al; }
+    else if (type==='hp'){ b0=(1+cs)/2; b1=-(1+cs); b2=b0; a0=1+al; a1=-2*cs; a2=1-al; }
+    else if (type==='bp'){ b0=al; b1=0; b2=-al; a0=1+al; a1=-2*cs; a2=1-al; }
+    else { // high shelf
+      const A = Math.pow(10,(gDb||0)/40), sq = 2*Math.sqrt(A)*(sn/2*Math.SQRT2);
+      b0=A*((A+1)+(A-1)*cs+sq); b1=-2*A*((A-1)+(A+1)*cs); b2=A*((A+1)+(A-1)*cs-sq);
+      a0=(A+1)-(A-1)*cs+sq; a1=2*((A-1)-(A+1)*cs); a2=(A+1)-(A-1)*cs-sq;
+    }
+    b0/=a0; b1/=a0; b2/=a0; a1/=a0; a2/=a0;
+    const y = new Float32Array(x.length); let x1=0,x2=0,y1=0,y2=0;
+    for (let i=0;i<x.length;i++){
+      const xi = x[i], yi = b0*xi+b1*x1+b2*x2-a1*y1-a2*y2;
+      x2=x1; x1=xi; y2=y1; y1=yi; y[i]=yi;
+    }
+    return y;
+  }
+  /* the wooden body of a guitar/bouzouki: a handful of resonances added to the dry string sound */
+  function body(x, modes, dry){
+    const y = new Float32Array(x.length), d = dry==null ? 0.85 : dry;
+    for (let i=0;i<x.length;i++) y[i] = x[i]*d;
+    for (const [f,Q,g] of modes){ const r = biquad(x,'bp',f,Q); for (let i=0;i<x.length;i++) y[i] += r[i]*g; }
+    return y;
+  }
+
+  /* ---------- instruments ---------- */
+  /* A plucked string: Karplus-Strong with exact tuning, a softened pick, a pick-position comb,
+     a short wooden "thunk", and human variation in touch. Adds into track `tr`. */
+  function pluck(tr, t, midi, dur, vel, rnd, o){
+    o = o || {};
+    const f = hz(midi), start = Math.round(t*SR);
+    if (start<0 || start>=tr.length) return;
+    const len = Math.min(Math.round(dur*SR), tr.length-start);
+    const total = SR/f + 0.5, N = Math.max(3, Math.floor(total-0.1)), d = total-N, C = (1-d)/(1+d);
+    const rho = Math.pow(10, -3*((N+d-0.5)/SR)/(o.t60||1.0));
+    const buf = new Float32Array(N); let prev = 0, mean = 0; const br = o.bright==null ? 0.5 : o.bright;
+    for (let i=0;i<N;i++){ prev = br*rnd()+(1-br)*prev; buf[i] = prev; }
+    const pp = Math.max(1, Math.round((o.pos||0.15)*N));
+    for (let i=N-1;i>=pp;i--) buf[i] -= buf[i-pp];
+    for (let i=0;i<N;i++) mean += buf[i]; mean /= N;
+    let e = 0; for (let i=0;i<N;i++){ buf[i] -= mean; e += buf[i]*buf[i]; }
+    const sc = 0.4/(Math.sqrt(e/N)||1);
+    for (let i=0;i<N;i++) buf[i] *= sc;
+    const amp = vel*(0.88+0.24*(rnd()*0.5+0.5));
     let idx = 0, apx = 0, apy = 0;
     for (let i=0;i<len;i++){
       const nx = (idx+1)%N, v = buf[idx];
-      let env = 1; const tail = len-i; if (tail<400) env = tail/400;            // no clicks at the end
-      out[start+i] += v*gain*env;
+      let env = 1; const tail = len-i; if (tail<600) env = tail/600;
+      tr[start+i] += v*amp*env;
       const lp = rho*0.5*(v+buf[nx]);
       const ap = C*lp + apx - C*apy; apx = lp; apy = ap;
       buf[idx] = ap; idx = nx;
     }
-  }
-  /* Two strings a hair apart (a doubled course), for the bouzouki/mandolin shimmer. */
-  function course(out, t, midi, dur, gain, rnd, t60){
-    pluck(out, t, midi, dur, gain, rnd, t60);
-    pluck(out, t+0.004, midi+0.06, dur, gain*0.6, rnd, t60);
-  }
-  function tremolo(out, t, midi, dur, gain, rnd){
-    const step = 0.07; let k = 0;
-    for (let x=0; x<dur; x+=step, k++) pluck(out, t+x, midi, 0.35, gain*(k?0.62:1), rnd, 0.5);
-  }
-  function strum(out, t, midis, gain, rnd, spread){
-    midis.forEach((m,i)=>pluck(out, t+i*(spread||0.012), m, 0.9, gain, rnd, 0.9));
-  }
-  function kick(out, t, gain){
-    const start = Math.round(t*SR), len = Math.round(0.16*SR); let ph = 0;
-    for (let i=0;i<len && start+i<out.length;i++){
-      const x = i/SR, f = 50+60*Math.exp(-x*30); ph += 2*Math.PI*f/SR;
-      out[start+i] += Math.sin(ph)*Math.exp(-x*22)*gain;
+    if (o.thump){                                         // the soft knock of finger on wood
+      const tl = Math.round(0.05*SR), fq = o.thumpHz || 120;
+      for (let i=0;i<tl && start+i<tr.length;i++){ const x = i/SR; tr[start+i] += Math.sin(2*Math.PI*fq*x)*Math.exp(-x*70)*o.thump*amp; }
     }
   }
-  function tek(out, t, gain, rnd){        // a dry hand-drum slap
-    const start = Math.round(t*SR), len = Math.round(0.07*SR); let last = 0;
-    for (let i=0;i<len && start+i<out.length;i++){
-      const n = rnd(), hp = n-last; last = n;
-      out[start+i] += hp*Math.exp(-i/SR*55)*gain;
+  function strum(tr, t, midis, vel, rnd, o){
+    o = o || {}; const gap = o.gap || 0.012, up = o.up;
+    const list = up ? midis.slice().reverse() : midis;
+    list.forEach((m,i)=>pluck(tr, t+i*gap+rnd()*0.002, m, o.dur||0.9, vel*(1-i*0.04), rnd, o));
+  }
+  function tremolo(tr, t, midi, dur, vel, rnd, o){
+    const step = 0.072; let k = 0;
+    for (let x=0; x<dur; x+=step, k++) pluck(tr, t+x+rnd()*0.004, midi, 0.4, vel*(k?0.66:1)*(0.85+0.15*(k%2)), rnd, o);
+  }
+  /* celesta / music box: a few bell-like partials, each dying away at its own rate */
+  function bellTone(tr, t, midi, dur, vel, rnd){
+    const f = hz(midi), start = Math.round(t*SR), len = Math.min(Math.round(dur*SR), tr.length-start);
+    if (len<=0) return;
+    const parts = [[1,1.0,1.6],[2,0.32,1.0],[3,0.14,0.7],[4,0.36,0.55],[5.94,0.09,0.3]];
+    for (const [r,a,T] of parts){
+      if (f*r > SR*0.45) continue;
+      const w = 2*Math.PI*f*r/SR, k = Math.exp(-6.91/(T*SR)), c2 = 2*Math.cos(w), ph = rnd()*6.28;
+      let s1 = Math.sin(ph-w), s0 = Math.sin(ph), env = 1;
+      for (let i=0;i<len;i++){
+        const att = i<48 ? i/48 : 1;
+        tr[start+i] += s0*env*att*a*vel*0.5;
+        const sn = c2*s0 - s1; s1 = s0; s0 = sn; env *= k;
+      }
     }
   }
-  function jingle(out, t, gain, rnd){     // tambourine
-    for (let k=0;k<3;k++) tek(out, t+k*0.012, gain*(1-k*0.25), rnd);
+  /* a soft string-section pad: gently detuned voices with a slow attack and release */
+  function padTone(tr, t, midi, dur, vel){
+    const f = hz(midi), start = Math.round(t*SR), len = Math.min(Math.round(dur*SR), tr.length-start);
+    if (len<=0) return;
+    const att = 0.28*SR, rel = 0.45*SR;
+    for (const cents of [-6,6]){
+      const ff = f*Math.pow(2,cents/1200);
+      for (let h=1;h<=6;h++){
+        if (ff*h > SR*0.4) break;
+        const w = 2*Math.PI*ff*h/SR, a = vel*0.24/h, c2 = 2*Math.cos(w);
+        let s1 = Math.sin(-w), s0 = 0;
+        for (let i=0;i<len;i++){
+          const env = Math.min(1, i/att) * Math.min(1, (len-i)/rel);
+          tr[start+i] += s0*env*a;
+          const sn = c2*s0 - s1; s1 = s0; s0 = sn;
+        }
+      }
+    }
   }
 
-  function finish(out){
-    let sum = 0; for (let i=0;i<out.length;i++) sum += out[i]*out[i];
-    const rms = Math.sqrt(sum/out.length) || 1, g = 0.17/rms, fade = Math.round(1.6*SR);
-    for (let i=0;i<out.length;i++){
-      let v = Math.tanh(out[i]*g)*0.92;
-      const left = out.length-i; if (left<fade) v *= left/fade;
-      out[i] = v;
+  /* a mariachi trumpet: a rich harmonic tone with a little scoop up into long notes, a slow vibrato, and a bright bite at the start */
+  function trumpet(tr, t, midi, dur, vel, rnd, o){
+    o = o || {};
+    const f0 = hz(midi), start = Math.round(t*SR), len = Math.min(Math.round(dur*SR), tr.length-start);
+    if (len<=0) return;
+    const H = 10, scoop = dur>0.34, ph = new Float64Array(H+1), wt = new Float64Array(H+1);
+    let vib = rnd()*6.28;
+    const vw = 5.6/SR*2*Math.PI, relN = Math.round(0.07*SR);
+    for (let i=0;i<len;i++){
+      const x = i/SR;
+      if ((i&63)===0){                                              // brightness changes slowly, so update the harmonic mix now and then
+        const br = 0.58 + 0.42*Math.exp(-x*8) + (o.blare||0);
+        for (let h=1;h<=H;h++) wt[h] = Math.pow(h,-1.1)*(h===1 ? 1 : Math.pow(br,h-1));
+      }
+      let cents = scoop && x<0.075 ? -50*(1-x/0.075) : 0;
+      if (x>0.2) cents += Math.min(1,(x-0.2)/0.3)*9*Math.sin(vib);
+      vib += vw;
+      const w = 2*Math.PI*f0*(1+cents*0.000577623)/SR;
+      let sv = 0;
+      for (let h=1;h<=H;h++){ if (f0*h>SR*0.42) break; ph[h] += w*h; sv += Math.sin(ph[h])*wt[h]; }
+      const env = Math.min(1, x/0.03) * Math.min(1, (len-i)/relN);
+      tr[start+i] += (sv + rnd()*0.05*Math.exp(-x*40))*env*vel*0.2;
     }
-    return out;
+  }
+  /* bowed strings: a few softly detuned voices with a slow attack and a gentle vibrato */
+  function violin(tr, t, midi, dur, vel, rnd){
+    const f0 = hz(midi), start = Math.round(t*SR), len = Math.min(Math.round(dur*SR), tr.length-start);
+    if (len<=0) return;
+    for (const dc of [-5,5]){
+      const H = 9, ph = new Float64Array(H+1); let vib = rnd()*6.28;
+      const vw = 5.3/SR*2*Math.PI, relN = Math.round(0.22*SR), attN = Math.round(0.1*SR);
+      for (let i=0;i<len;i++){
+        const x = i/SR, cents = dc + Math.min(1,x/0.4)*7*Math.sin(vib); vib += vw;
+        const w = 2*Math.PI*f0*(1+cents*0.000577623)/SR;
+        let sv = 0;
+        for (let h=1;h<=H;h++){ if (f0*h>SR*0.42) break; ph[h] += w*h; sv += Math.sin(ph[h])/h; }
+        tr[start+i] += sv*Math.min(1,i/attN)*Math.min(1,(len-i)/relN)*vel*0.1;
+      }
+    }
   }
 
-  /* GREEK: D "hijaz" mode, slow at first and speeding up like a sirtaki. About 14 seconds. */
+  /* ---------- hand percussion (kept soft and round, not hissy) ---------- */
+  function drum(tr, t, vel, hzLo){            // frame drum / bombo
+    const start = Math.round(t*SR), len = Math.round(0.3*SR); let ph = 0;
+    for (let i=0;i<len && start+i<tr.length;i++){
+      const x = i/SR, f = (hzLo||55)+70*Math.exp(-x*35); ph += 2*Math.PI*f/SR;
+      tr[start+i] += Math.sin(ph)*Math.exp(-x*14)*vel;
+    }
+  }
+  function noiseHit(tr, t, vel, decay, rnd){  // raw noise burst, shaped later by a filter on the track
+    const start = Math.round(t*SR), len = Math.round(decay*5*SR);
+    for (let i=0;i<len && start+i<tr.length;i++) tr[start+i] += rnd()*Math.exp(-i/SR/decay)*vel;
+  }
+
+  /* ---------- mixing ---------- */
+  function reverb(inp){
+    const n = inp.length, L = new Float32Array(n), R = new Float32Array(n);
+    const combs = [29.7,37.1,41.1,43.7,50.3,53.9];
+    const pre = Math.round(0.014*SR);
+    for (const side of [0,1]){
+      const out = side ? R : L, spread = side ? 0.0009 : 0;
+      for (const ms of combs){
+        const D = Math.round((ms/1000+spread)*SR), buf = new Float32Array(D); let idx = 0, filt = 0;
+        for (let i=pre;i<n;i++){
+          const o = buf[idx]; filt = o*0.72 + filt*0.28; buf[idx] = inp[i-pre] + filt*0.80; idx = (idx+1)%D;
+          out[i] += o*0.16;
+        }
+      }
+      for (const ms of [5.1,12.6]){
+        const D = Math.round(ms/1000*SR), buf = new Float32Array(D); let idx = 0;
+        for (let i=0;i<n;i++){ const b = buf[idx], x = out[i]; const y = -x + b; buf[idx] = x + b*0.5; out[i] = y; idx = (idx+1)%D; }
+      }
+    }
+    return [L,R];
+  }
+  /* strips = [{x, pan(-1..1), gain, send}] -> finished stereo clip */
+  function mixdown(strips, n){
+    const L = new Float32Array(n), R = new Float32Array(n), send = new Float32Array(n);
+    for (const s of strips){
+      const gl = s.gain*Math.cos((s.pan+1)*Math.PI/4), gr = s.gain*Math.sin((s.pan+1)*Math.PI/4);
+      for (let i=0;i<n;i++){ const v = s.x[i]; L[i] += v*gl; R[i] += v*gr; send[i] += v*s.send; }
+    }
+    const [wl,wr] = reverb(send);
+    for (let i=0;i<n;i++){ L[i] += wl[i]; R[i] += wr[i]; }
+    let a = biquad(L,'hs',3500,0.7,-4), b = biquad(R,'hs',3500,0.7,-4);
+    a = biquad(a,'lp',10500,0.6); b = biquad(b,'lp',10500,0.6);
+    let sum = 0; for (let i=0;i<n;i++) sum += a[i]*a[i]+b[i]*b[i];
+    const rms = Math.sqrt(sum/(2*n)) || 1, g = 0.16/rms, fade = Math.round(1.8*SR);
+    for (let i=0;i<n;i++){
+      const left = n-i, f = left<fade ? left/fade : 1;
+      a[i] = Math.tanh(a[i]*g)*0.92*f; b[i] = Math.tanh(b[i]*g)*0.92*f;
+    }
+    return {L:a, R:b};
+  }
+  const GUITAR_BODY = [[98,9,0.9],[196,10,0.55],[262,12,0.45],[390,10,0.3],[520,9,0.2]];
+  const BOUZOUKI_BODY = [[110,9,0.7],[220,10,0.6],[330,10,0.45],[470,9,0.35],[640,8,0.2]];
+  const BASS_BODY = [[62,8,1.0],[110,8,0.5]];
+
+  /* ---------- GREEK: D "hijaz" mode, slow at first, speeding up like a sirtaki (~14 s) ---------- */
   function greek(){
-    const out = new Float32Array(Math.round(14.8*SR)), rnd = rng(7);
+    const n = Math.round(14.8*SR), rnd = rng(7);
+    const lead = new Float32Array(n), bass = new Float32Array(n), chd = new Float32Array(n), drumT = new Float32Array(n), tekT = new Float32Array(n);
     const D=62,Eb=63,Fs=66,G=67,A=69,Bb=70,C=72,D5=74;
-    const sections = [
+    const secs = [
       {bpm:96,  bars:[[[A,1],[A,.5],[Bb,.5],[A,1],[G,1]], [[Fs,1],[G,.5],[Fs,.5],[Eb,1],[D,1]]]},
       {bpm:120, bars:[[[D,.5],[Eb,.5],[Fs,.5],[G,.5],[A,1],[A,1]], [[Bb,1],[A,.5],[G,.5],[Fs,1],[D,1]]]},
       {bpm:150, bars:[[[D5,.5],[C,.5],[Bb,.5],[A,.5],[G,.5],[Fs,.5],[Eb,.5],[D,.5]], [[Eb,.5],[Fs,.5],[G,.5],[A,.5],[Bb,.5],[A,.5],[G,.5],[Fs,.5]]]},
       {bpm:170, bars:[[[D,.5],[Fs,.5],[A,.5],[D5,.5],[D5,2]]]}
     ];
+    const bz = {bright:0.55, pos:0.13, t60:0.95, thump:0.05, thumpHz:130};
     let t = 0, barNo = 0;
-    for (const sec of sections){
+    for (const sec of secs){
       const beat = 60/sec.bpm;
       for (const bar of sec.bars){
-        // melody
         let bt = 0;
-        for (const [m,b] of bar){ course(out, t+bt*beat, m, Math.max(b*beat*1.9,0.5), 0.55, rnd, 1.0); bt += b; }
-        // bass, strums and drums
+        for (const [m,b] of bar){
+          const tt = t+bt*beat+rnd()*0.004, dd = Math.max(b*beat*1.9, 0.5), v = 0.9+0.1*rnd();
+          pluck(lead, tt, m, dd, v, rnd, bz); pluck(lead, tt+0.005, m+0.05, dd, v*0.5, rnd, bz);
+          if (m<72) pluck(lead, tt, m-12, dd, v*0.3, rnd, {bright:0.4,pos:0.2,t60:0.9});
+          bt += b;
+        }
         const eb = (barNo===1 || barNo===3);
-        pluck(out, t, 38, 1.2, 0.5, rnd, 1.6);                              // D2
-        pluck(out, t+2*beat, eb?39:45, 1.2, 0.45, rnd, 1.6);                // Eb2 or A2
-        strum(out, t+1*beat, [50,54,57], 0.22, rnd);                         // D major (low)
-        strum(out, t+3*beat, eb?[51,55,58]:[50,54,57], 0.22, rnd);
-        kick(out, t, 0.55); kick(out, t+2*beat, 0.45); tek(out, t+beat, 0.3, rnd); tek(out, t+3*beat, 0.3, rnd);
+        pluck(bass, t, 38, 1.3, 1.0, rnd, {bright:0.3,pos:0.25,t60:1.5,thump:0.2,thumpHz:90});
+        pluck(bass, t+2*beat, eb?39:45, 1.3, 0.9, rnd, {bright:0.3,pos:0.25,t60:1.5,thump:0.2,thumpHz:90});
+        strum(chd, t+1*beat, [50,54,57], 0.5, rnd, {bright:0.45,pos:0.2,t60:0.8,gap:0.014});
+        strum(chd, t+3*beat, eb?[51,55,58]:[50,54,57], 0.5, rnd, {bright:0.45,pos:0.2,t60:0.8,gap:0.014});
+        drum(drumT, t, 0.9, 52); drum(drumT, t+2*beat, 0.7, 52);
+        noiseHit(tekT, t+beat+rnd()*0.003, 0.5, 0.025, rnd); noiseHit(tekT, t+3*beat+rnd()*0.003, 0.5, 0.025, rnd);
         t += 4*beat; barNo++;
       }
     }
-    pluck(out, t-0.02, 50, 2.0, 0.4, rnd, 2.0); strum(out, t, [50,54,57,62], 0.4, rnd, 0.02);   // final chord
-    return finish(out);
+    pluck(bass, t-0.02, 38, 2.4, 1.0, rnd, {bright:0.3,pos:0.25,t60:2.0,thump:0.2,thumpHz:90});
+    strum(chd, t, [50,54,57,62], 0.7, rnd, {bright:0.45,pos:0.2,t60:1.4,gap:0.02,dur:2.2});
+    pluck(lead, t, 74, 2.2, 0.9, rnd, {bright:0.55,pos:0.13,t60:1.3}); pluck(lead, t, 62, 2.2, 0.5, rnd, {bright:0.4,pos:0.2,t60:1.3});
+    return mixdown([
+      {x:biquad(body(lead,BOUZOUKI_BODY),'lp',6000,0.6), pan:-0.15, gain:0.9, send:0.20},
+      {x:biquad(body(chd,GUITAR_BODY),'lp',4600,0.6),    pan: 0.35, gain:0.65, send:0.26},
+      {x:biquad(body(bass,BASS_BODY),'lp',700,0.7),      pan: 0.0,  gain:0.95, send:0.06},
+      {x:biquad(drumT,'lp',300,0.7),                      pan: 0.05, gain:0.8,  send:0.10},
+      {x:biquad(biquad(tekT,'bp',2200,1.3),'lp',5200,0.6),pan: 0.25, gain:0.9,  send:0.14}
+    ], n);
   }
 
-  /* ITALIAN: a bouncy 6/8 tarantella for mandolin, in A minor with the E7 turnaround. About 14 seconds. */
+  /* ---------- ITALIAN: a bouncy 6/8 tarantella for mandolin, A minor with an E7 turnaround (~14 s) ---------- */
   function italian(){
-    const out = new Float32Array(Math.round(14.8*SR)), rnd = rng(21);
+    const n = Math.round(14.8*SR), rnd = rng(21);
+    const lead = new Float32Array(n), bass = new Float32Array(n), chd = new Float32Array(n), tamb = new Float32Array(n);
     const H='_';
-    const bars = [
-      [69,72,76,76,74,72],[71,72,71,69,H,H],[68,71,74,74,72,71],[72,71,69,69,H,H],
-      [74,76,77,76,74,72],[71,72,74,72,71,68],[69,72,76,81,H,H],[68,71,76,69,H,H]
-    ];
-    const chord = [ {bass:[45,52], st:[57,60,64]}, {bass:[45,52], st:[57,60,64]}, {bass:[40,47], st:[56,59,62,64]}, {bass:[45,52], st:[57,60,64]},
-                    {bass:[50,45], st:[57,62,65]}, {bass:[40,47], st:[56,59,62,64]}, {bass:[45,52], st:[57,60,64]}, {bass:[40,45], st:[56,59,64]} ];
+    const bars = [[69,72,76,76,74,72],[71,72,71,69,H,H],[68,71,74,74,72,71],[72,71,69,69,H,H],
+                  [74,76,77,76,74,72],[71,72,74,72,71,68],[69,72,76,81,H,H],[68,71,76,69,H,H]];
+    const chord = [{b:[45,52],s:[57,60,64]},{b:[45,52],s:[57,60,64]},{b:[40,47],s:[56,59,62,64]},{b:[45,52],s:[57,60,64]},
+                   {b:[50,45],s:[57,62,65]},{b:[40,47],s:[56,59,62,64]},{b:[45,52],s:[57,60,64]},{b:[40,45],s:[56,59,64]}];
+    const mand = {bright:0.7, pos:0.1, t60:0.6, thump:0.03, thumpHz:160}, gtr = {bright:0.45,pos:0.2,t60:0.9,thump:0.06,thumpHz:110};
     let t = 0;
     [0.150, 0.128].forEach((e,pass)=>{
       bars.forEach((bar,bi)=>{
         for (let i=0;i<6;i++){
           const m = bar[i]; if (m===H) continue;
-          let n = 1; while (i+n<6 && bar[i+n]===H) n++;
-          const dur = n*e, tt = t+i*e;
-          if (n>=3) tremolo(out, tt, m, dur, 0.5, rnd); else course(out, tt, m, 0.5, 0.5, rnd, 0.8);
-          if (pass===1) pluck(out, tt, m+12, 0.4, 0.16, rnd, 0.6);
+          let k = 1; while (i+k<6 && bar[i+k]===H) k++;
+          const tt = t+i*e+rnd()*0.004, v = 0.85+0.15*rnd();
+          if (k>=3) tremolo(lead, tt, m, k*e, v, rnd, mand);
+          else { pluck(lead, tt, m, 0.5, v, rnd, mand); pluck(lead, tt+0.004, m+0.06, 0.5, v*0.5, rnd, mand); }
+          if (pass===1) pluck(lead, tt, m+12, 0.4, v*0.18, rnd, {bright:0.5,pos:0.1,t60:0.5});
         }
         const c = chord[bi];
-        pluck(out, t, c.bass[0], 0.7, 0.45, rnd, 1.2); pluck(out, t+3*e, c.bass[1], 0.7, 0.4, rnd, 1.2);
-        [1,2,4,5].forEach(k=>strum(out, t+k*e, c.st, 0.13, rnd, 0.008));
-        for (let i=0;i<6;i++) jingle(out, t+i*e, i%3===0?0.10:0.05, rnd);
+        pluck(bass, t, c.b[0], 0.9, 1.0, rnd, {bright:0.3,pos:0.25,t60:0.9,thump:0.2,thumpHz:90});
+        pluck(bass, t+3*e, c.b[1], 0.9, 0.9, rnd, {bright:0.3,pos:0.25,t60:0.9,thump:0.2,thumpHz:90});
+        [1,2,4,5].forEach(k=>strum(chd, t+k*e, c.s, 0.4, rnd, Object.assign({gap:0.009,dur:0.5},gtr)));
+        for (let i=0;i<6;i++){ const acc = i%3===0?0.55:0.3; for (let q=0;q<3;q++) noiseHit(tamb, t+i*e+q*0.011, acc*(1-q*0.25), 0.02, rnd); }
         t += 6*e;
       });
     });
-    pluck(out, t, 45, 2.0, 0.45, rnd, 2.0); strum(out, t, [57,60,64,69], 0.4, rnd, 0.018);
-    tremolo(out, t, 81, 1.0, 0.3, rnd);
-    return finish(out);
+    pluck(bass, t, 45, 2.4, 1.0, rnd, {bright:0.3,pos:0.25,t60:2.0,thump:0.2,thumpHz:90});
+    strum(chd, t, [57,60,64,69], 0.6, rnd, Object.assign({gap:0.018,dur:2.2},gtr));
+    tremolo(lead, t, 81, 1.0, 0.7, rnd, mand);
+    return mixdown([
+      {x:biquad(body(lead,BOUZOUKI_BODY.map(m=>[m[0]*1.5,m[1],m[2]*0.8]),0.8),'lp',6500,0.6), pan:-0.2, gain:0.85, send:0.22},
+      {x:biquad(body(chd,GUITAR_BODY),'lp',4400,0.6),   pan: 0.4,  gain:0.6,  send:0.26},
+      {x:biquad(body(bass,BASS_BODY),'lp',700,0.7),     pan: 0.0,  gain:0.9,  send:0.06},
+      {x:biquad(biquad(tamb,'bp',4200,0.9),'lp',7500,0.6), pan: 0.3, gain:0.6, send:0.16}
+    ], n);
   }
 
-  function render(style){ return style==='greek' ? greek() : style==='italian' ? italian() : null; }
+  /* ---------- TEX-MEX / MEXICAN: a mariachi-style son in 6/8, G major, two trumpets in thirds with violins (~14 s) ---------- */
+  function texmex(){
+    const n = Math.round(14.9*SR), rnd = rng(33);
+    const tp1 = new Float32Array(n), tp2 = new Float32Array(n), vln = new Float32Array(n), vih = new Float32Array(n), gtr = new Float32Array(n), bass = new Float32Array(n), mar = new Float32Array(n), stomp = new Float32Array(n);
+    const H = '_';
+    const pcs = [0,2,4,6,7,9,11];                                         // G major
+    const below3 = m => { let x = m; for (let q=0;q<2;q++){ x--; while (pcs.indexOf(((x%12)+12)%12)<0) x--; } return x; };
+    const bars = [
+      [71,71,74,79,H,H],[78,76,74,72,H,H],[71,71,74,79,H,H],[78,76,74,76,74,72],
+      [72,72,76,79,H,H],[71,74,79,76,74,71],[69,72,74,78,H,H],[79,H,H,74,71,67],
+      [76,79,84,H,79,76],[74,79,83,H,79,74],[72,74,78,81,H,H],[79,H,H,H,H,H]
+    ];
+    const cg = {b:[43,50], s:[55,59,62,67], v:[67,71,74]}, cd = {b:[38,45], s:[50,54,57,60], v:[69,72,74]}, cc = {b:[48,43], s:[52,55,60,64], v:[67,72,76]};
+    const ch = [cg,cd,cg,cd,cc,cg,cd,cg,cc,cg,cd,cg];
+    const e = 0.18, gt = {bright:0.42, pos:0.2, t60:0.75, thump:0.06, thumpHz:110}, bs = {bright:0.28, pos:0.25, t60:0.9, thump:0.25, thumpHz:95};
+    let t = 0;
+    bars.forEach((bar,bi)=>{
+      const c = ch[bi], last = (bi===bars.length-1);
+      for (let i=0;i<6;i++){
+        const m = bar[i]; if (m===H) continue;
+        let k = 1; while (i+k<6 && bar[i+k]===H) k++;
+        const dur = last ? 2.0 : (k===1 ? e*0.95 : k*e*0.98), tt = t+i*e+rnd()*0.003, v = 0.82+0.18*rnd();
+        trumpet(tp1, tt, m, dur, v, rnd, {blare:bi>=8?0.12:0});
+        trumpet(tp2, tt+0.008, below3(m), dur, v*0.88, rnd, {blare:bi>=8?0.12:0});
+      }
+      if (bi>=4) c.v.forEach(m=>violin(vln, t, m, 6*e+0.1, bi>=8?0.9:0.65, rnd));
+      pluck(bass, t, c.b[0], 0.7, 1.0, rnd, bs); pluck(bass, t+3*e, c.b[1], 0.7, 0.9, rnd, bs);
+      [1,2,4,5].forEach((k,j)=>strum(vih, t+k*e, c.s, 0.42, rnd, Object.assign({gap:0.007,dur:0.3,up:(j%2===1)},gt)));
+      [0,3].forEach(k=>strum(gtr, t+k*e, c.s.slice(0,3), 0.3, rnd, Object.assign({gap:0.011,dur:0.5},gt)));
+      for (let i=0;i<6;i++) noiseHit(mar, t+i*e+rnd()*0.002, i%3===0?0.5:0.3, 0.028, rnd);
+      if (bi<8){ drum(stomp, t, 0.5, 95); drum(stomp, t+3*e, 0.35, 95); }
+      t += 6*e;
+    });
+    const cg2 = cg;
+    pluck(bass, t-0.05, 43, 2.6, 1.0, rnd, {bright:0.28,pos:0.25,t60:2.0,thump:0.25,thumpHz:95});
+    strum(gtr, t-0.05, cg2.s, 0.6, rnd, Object.assign({gap:0.02,dur:2.2},gt));
+    cg2.v.forEach(m=>violin(vln, t-0.05, m, 2.0, 0.9, rnd));
+    const BELL = [[1100,2.0,0.3]];
+    return mixdown([
+      {x:biquad(body(tp1,BELL,0.9),'lp',4600,0.6),         pan:-0.25, gain:1.15, send:0.30},
+      {x:biquad(body(tp2,BELL,0.9),'lp',4400,0.6),         pan: 0.25, gain:1.0,  send:0.30},
+      {x:biquad(vln,'lp',3600,0.6),                         pan:-0.5,  gain:0.42, send:0.30},
+      {x:biquad(body(vih,GUITAR_BODY),'lp',4400,0.6),      pan: 0.45, gain:1.0,  send:0.24},
+      {x:biquad(body(gtr,GUITAR_BODY),'lp',4000,0.6),      pan: 0.15, gain:0.85, send:0.24},
+      {x:biquad(body(bass,BASS_BODY),'lp',650,0.7),        pan: 0.0,  gain:0.95, send:0.06},
+      {x:biquad(biquad(mar,'bp',4800,1.0),'lp',8000,0.6),  pan: 0.4,  gain:0.6,  send:0.12},
+      {x:biquad(stomp,'lp',240,0.7),                        pan: 0.0,  gain:0.6,  send:0.08}
+    ], n);
+  }
+
+  /* ---------- HOLIDAY: celesta, bells and strings playing the "Jingle Bells" chorus (public domain, 1857) ---------- */
+  function holiday(){
+    const n = Math.round(14.9*SR), rnd = rng(11);
+    const cel = new Float32Array(n), pad = new Float32Array(n), bass = new Float32Array(n), bells = new Float32Array(n);
+    const beat = 60/150;
+    const E=64,G=67,Cn=60,D=62,F=65,G4=67;
+    const mel = [
+      [[E,1],[E,1],[E,2]], [[E,1],[E,1],[E,2]], [[E,1],[G,1],[Cn,1.5],[D,.5]], [[E,4]],
+      [[F,1],[F,1],[F,1.5],[F,.5]], [[F,1],[E,1],[E,1],[E,.5],[E,.5]], [[E,1],[D,1],[D,1],[E,1]], [[D,2],[G,2]]
+    ];
+    const harm = [ [55,60,64], [55,60,64], [55,60,64], [55,60,64], [53,57,60], [55,60,64], [55,59,62,65], [55,59,62,65] ];
+    const roots = [[36,43],[36,43],[36,43],[36,43],[41,36],[36,43],[43,38],[43,38]];
+    const pz = {bright:0.3,pos:0.25,t60:0.55,thump:0.2,thumpHz:100};
+    let t = 0;
+    mel.forEach((bar,bi)=>{
+      let bt = 0;
+      for (const [m,b] of bar){
+        const tt = t+bt*beat+rnd()*0.003, v = 0.8+0.2*rnd();
+        bellTone(cel, tt, m+12, Math.max(b*beat*1.6,0.9), v, rnd);
+        bellTone(cel, tt, m, Math.max(b*beat*1.6,0.9), v*0.35, rnd);
+        bt += b;
+      }
+      harm[bi].forEach(m=>padTone(pad, t, m, 4*beat+0.35, 0.55));
+      pluck(bass, t, roots[bi][0], 0.8, 0.9, rnd, pz); pluck(bass, t+2*beat, roots[bi][1], 0.8, 0.8, rnd, pz);
+      for (let i=0;i<8;i++){ const tt = t+i*beat/2; for (let q=0;q<3;q++) noiseHit(bells, tt+q*0.013+rnd()*0.003, (i%2===0?0.5:0.28)*(1-q*0.3), 0.045, rnd); }
+      t += 4*beat;
+    });
+    [48,52,55,60].forEach((m,i)=>padTone(pad, t, m, 2.8, 0.6));
+    bellTone(cel, t, 84, 2.6, 0.9, rnd); bellTone(cel, t, 72, 2.6, 0.5, rnd); bellTone(cel, t+0.02, 79, 2.4, 0.45, rnd);
+    pluck(bass, t, 36, 2.4, 0.9, rnd, {bright:0.3,pos:0.25,t60:1.2,thump:0.2,thumpHz:100});
+    return mixdown([
+      {x:biquad(cel,'lp',8000,0.6),                         pan:-0.1, gain:1.45, send:0.34},
+      {x:biquad(pad,'lp',1900,0.6),                         pan: 0.0, gain:0.36, send:0.30},
+      {x:biquad(body(bass,BASS_BODY),'lp',650,0.7),         pan: 0.0, gain:0.8,  send:0.06},
+      {x:biquad(biquad(bells,'bp',5200,1.3),'lp',8500,0.6), pan: 0.3, gain:0.7, send:0.22}
+    ], n);
+  }
+
+  function render(style){
+    return style==='greek' ? greek() : style==='italian' ? italian() : style==='texmex' ? texmex() : style==='holiday' ? holiday() : null;
+  }
+
+  return {SR, render, pluck, trumpet, violin};
+}
+
+const Music = (()=>{
+  const synth = makeSynth(), SR = synth.SR;
+  let ctx = null, playing = null, enabled = true, cache = {}, lastFor = '', htmlAudio = null, fileTimer = null;
+  let worker = null, waiters = {}, token = 0;
 
   /* ---------- playback ---------- */
   function ensureCtx(){
@@ -2430,7 +2693,27 @@ const Music = (()=>{
     try{ ctx = new AC(); }catch(e){ ctx = null; }
     return ctx;
   }
-  function prerender(){ setTimeout(()=>{ ['greek','italian'].forEach(k=>{ if(!cache[k]) cache[k]=render(k); }); }, 50); }
+  const STYLES = ['greek','italian','holiday'];
+  /* Build the sound in a background worker so the page never freezes (falls back to the main thread). */
+  function getWorker(){
+    if (worker!==null) return worker;
+    try{
+      const code = 'const synth=('+makeSynth.toString()+')();self.onmessage=function(e){const c=synth.render(e.data);self.postMessage({style:e.data,L:c.L,R:c.R},[c.L.buffer,c.R.buffer]);};';
+      worker = new Worker(URL.createObjectURL(new Blob([code],{type:'text/javascript'})));
+      worker.onmessage = e=>{ const d = e.data; cache[d.style] = {L:d.L, R:d.R}; const w = waiters[d.style] || []; waiters[d.style] = []; w.forEach(f=>f()); };
+      worker.onerror = ()=>{ worker = false; };
+    }catch(err){ worker = false; }
+    return worker;
+  }
+  function ensureClip(style, cb){
+    if (cache[style]) return cb();
+    (waiters[style] = waiters[style] || []).push(cb);
+    if (waiters[style].length>1) return;
+    const w = getWorker();
+    if (w){ w.postMessage(style); return; }
+    setTimeout(()=>{ cache[style] = synth.render(style); const l = waiters[style]; waiters[style] = []; l.forEach(f=>f()); }, 0);
+  }
+  function prerender(){ STYLES.forEach(k=>{ if (!cache[k]) ensureClip(k, ()=>{}); }); }
   function unlock(){          // call from a tap or key press so the browser allows sound later
     if (!enabled) return;
     if (ctx && ctx.state==='running'){ prerender(); return; }
@@ -2443,6 +2726,7 @@ const Music = (()=>{
   function secs(){ const v = (typeof CONFIG!=='undefined' && CONFIG.MUSIC && CONFIG.MUSIC.seconds); return typeof v==='number' ? v : 15; }
 
   function stop(fast){
+    token++;
     if (fileTimer){ clearTimeout(fileTimer); fileTimer = null; }
     if (htmlAudio){
       const a = htmlAudio; htmlAudio = null;
@@ -2453,40 +2737,54 @@ const Music = (()=>{
       try{ p.g.gain.setTargetAtTime(0, ctx.currentTime, fast?0.03:0.2); setTimeout(()=>{ try{p.src.stop();}catch(e){} }, fast?160:900); }catch(e){}
     }
   }
-  function playFile(url){
+  function playFile(url, style){
     try{
       const a = new Audio(url); a.volume = vol(); htmlAudio = a;
-      a.play().then(()=>{ fileTimer = setTimeout(()=>stop(false), secs()*1000); }).catch(()=>{ htmlAudio = null; });
+      const fallback = ()=>{ if (htmlAudio===a){ htmlAudio = null; playSynth(style); } };      // file missing or unreadable: use the built-in tune
+      a.addEventListener('error', fallback, {once:true});
+      a.play().then(()=>{ if (htmlAudio===a) fileTimer = setTimeout(()=>stop(false), secs()*1000); })
+        .catch(err=>{ if (err && err.name==='NotSupportedError') fallback(); else if (htmlAudio===a) htmlAudio = null; });
     }catch(e){ htmlAudio = null; }
+  }
+  function playSynth(style){
+    const c = ensureCtx(); if (!c) return;
+    const my = ++token;
+    const go = ()=>{
+      if (my!==token || c.state!=='running') return;           // moved on, or the browser said no (no tap yet)
+      ensureClip(style, ()=>{
+        if (my!==token || c.state!=='running') return;
+        const clip = cache[style];
+        const buf = c.createBuffer(2, clip.L.length, SR); buf.copyToChannel(clip.L, 0); buf.copyToChannel(clip.R, 1);
+        const src = c.createBufferSource(); src.buffer = buf;
+        const g = c.createGain(); g.gain.value = vol();
+        src.connect(g); g.connect(c.destination); src.start();
+        const me = {src, g}; playing = me;
+        src.onended = ()=>{ if (playing===me) playing = null; };
+      });
+    };
+    if (c.state==='running') go(); else c.resume().then(go).catch(()=>{});
   }
   function play(style){
     if (!enabled || !style) return;
     stop(true);
     const file = (typeof CONFIG!=='undefined' && CONFIG.MUSIC && CONFIG.MUSIC[style]) || '';
-    if (file) return playFile(file);
-    const c = ensureCtx(); if (!c) return;
-    const go = ()=>{
-      if (c.state!=='running') return;                       // the browser said no (no tap yet); stay quiet
-      const data = cache[style] || (cache[style] = render(style));
-      const buf = c.createBuffer(1, data.length, SR); buf.copyToChannel(data, 0);
-      const src = c.createBufferSource(); src.buffer = buf;
-      const g = c.createGain(); g.gain.value = vol();
-      src.connect(g); g.connect(c.destination); src.start();
-      const me = {src, g}; playing = me;
-      src.onended = ()=>{ if (playing===me) playing = null; };
-    };
-    if (c.state==='running') go(); else c.resume().then(go).catch(()=>{});
+    if (file) return playFile(file, style);
+    playSynth(style);
   }
 
+  function clean(s){ return (' '+s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z\s]/g,' '); }
   function styleFor(r){
-    const txt = (' '+[r.name, r.theme].join(' ')).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z\s]/g,' ');
-    if (/\bno music\b|\bsilent\b/.test(txt)) return '';
-    if (/\bgreek\b|\bgreece\b/.test(txt)) return 'greek';
-    if (/\bitalian\b|\bitaly\b|\btuscan\b|\btarantella\b/.test(txt)) return 'italian';
+    const base = clean([r.name, r.theme].join(' ')), holi = clean([r.name, r.theme, r.occasion].join(' '));
+    if (/\bno music\b|\bsilent\b/.test(holi)) return '';
+    if (/\bgreek\b|\bgreece\b/.test(base)) return 'greek';
+    if (/\bitalian\b|\bitaly\b|\btuscan\b|\btarantella\b/.test(base)) return 'italian';
+    // Tex-Mex / Mexican music is switched off for now. To bring it back, remove the two slashes at the start of the next line.
+    // if (/\btex mex\b|\bmexican\b|\bmexico\b|\btaco\b|\btacos\b|\bnacho\b|\bnachos\b|\benchilada\b|\bfajita\b|\bburrito\b|\bquesadilla\b|\bsouthwest\b|\bsouthwestern\b/.test(base)) return 'texmex';
+    if (/\bchristmas\b|\bholiday\b|\bholidays\b|\bxmas\b/.test(holi)) return 'holiday';
     return '';
   }
   return {
-    SR, render, styleFor, unlock, _pluck: pluck,
+    SR, render: synth.render, styleFor, unlock, _pluck: synth.pluck,
     forRecipe(r){ if (lastFor===r.id) return; lastFor = r.id; const s = styleFor(r); if (s) play(s); },
     leave(){ lastFor = ''; stop(false); },
     stop,
