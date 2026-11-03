@@ -645,7 +645,7 @@ body.is-home .home-bottom{display:none}
       <div class="filter-body">
         <div class="fgroup"><h3>Time</h3><div class="chips" id="f-time"></div></div>
         <div class="fgroup"><h3>Dietary</h3><div class="chips" id="f-diet"></div>
-          <p class="fnote">Labels come from the family recipe sheet. When a recipe has none, they are guessed from the ingredient names. If anyone has an allergy, always check the ingredients and labels yourself.</p></div>
+          <p class="fnote">Labels come from the family recipe sheet. A label with a note in parentheses needs that small change. Keto / low-carb and GERD-friendly appear only when they are typed in the sheet; they are never guessed. When a recipe has no labels, the others are guessed from the ingredient names. If anyone has an allergy, always check the ingredients and labels yourself.</p></div>
         <div class="fgroup" id="f-occ-wrap"><h3>Occasion</h3><div class="chips" id="f-occ"></div></div>
       </div>
     </details>
@@ -994,7 +994,7 @@ function prepare(raw){
     const dietText = [...dietSet(r,ingText)].map(k=>DIET_LABELS[k]||k).join(' ')+' '+(r.dietary||'');
     const norm = s => strip(s).replace(/[^a-z0-9\s]/g,' ');
     return Object.assign({}, r, {
-      id, themes, tagList:tags, ings, occasions:list(r.occasion), mins:totalMins(r), dietSet:dietSet(r,ingText), dietAuto:!list(r.dietary).length,
+      id, themes, tagList:tags, ings, occasions:list(r.occasion), mins:totalMins(r), dietSet:dietSet(r,ingText), dietAuto:!dietItems(r.dietary).length,
       _words:{},
       hay:{
         name:norm(r.name),
@@ -1027,23 +1027,39 @@ function totalMins(r){
   return (a==null && b==null) ? null : (a||0)+(b||0);
 }
 
-const DIET_LABELS = {vegetarian:'Vegetarian', dairyfree:'Dairy-free', glutenfree:'Gluten-free', nutfree:'Nut-free'};
+const DIET_LABELS = {vegetarian:'Vegetarian', vegan:'Vegan', dairyfree:'Dairy-free', glutenfree:'Gluten-free', nutfree:'Nut-free', keto:'Keto / low-carb', gerd:'GERD-friendly'};
 const DIET_RULES = {
   vegetarian: /\b(beef|chicken|turkey|pork|bacon|sausage|ham|lamb|steak|veal|brisket|crab|crabmeat|shrimp|salmon|fish|tuna|lobster|scallops?|anchov\w+|pepperoni|prosciutto|meatballs?|hot dogs?|bratwurst|chorizo|gelatin|lard|broth|stock|bouillon|clams?|oysters?|mussels?)\b/,
+  vegan:      /\b(beef|chicken|turkey|pork|bacon|sausage|ham|lamb|steak|veal|brisket|crab|crabmeat|shrimp|salmon|fish|tuna|lobster|scallops?|anchov\w+|pepperoni|prosciutto|meatballs?|hot dogs?|bratwurst|chorizo|gelatin|lard|broth|stock|bouillon|clams?|oysters?|mussels?|milk|cream|butter|cheese|cheddar|mozzarella|parmesan|yogurt|whey|buttermilk|ghee|ricotta|feta|pepperjack|provolone|half and half|eggs?|mayonnaise|honey)\b/,
   dairyfree:  /\b(milk|cream|butter|cheese|cheddar|mozzarella|parmesan|yogurt|whey|buttermilk|ghee|ricotta|feta|pepperjack|provolone|half and half)\b/,
   glutenfree: /\b(flour|bread|breadcrumbs?|pasta|noodles?|spaghetti|macaroni|orzo|couscous|tortillas?|crackers?|crescent|dough|biscuits?|barley|rye|wheat|soy sauce|beer|pie crust|cereal|panko|malt|pretzels?|croutons?|buns?|rolls?|pizza|oats?)\b/,
   nutfree:    /\b(almonds?|walnuts?|pecans?|cashews?|pistachios?|hazelnuts?|peanuts?|macadamias?|pine nuts?|nuts?)\b/
 };
 const DIET_SAFE = {
+  vegetarian: /vegetable broth|vegetable stock|veggie broth|vegetable bouillon/g,
+  vegan:      /vegetable broth|vegetable stock|veggie broth|vegetable bouillon|peanut butter|almond butter|cocoa butter|coconut milk|coconut cream|cream of tartar|almond milk|soy milk|oat milk|nut butter/g,
   dairyfree:  /peanut butter|almond butter|cocoa butter|coconut milk|coconut cream|cream of tartar|almond milk|soy milk|oat milk|nut butter/g,
   glutenfree: /almond flour|coconut flour|rice flour|corn tortillas?|corn flour|cornmeal/g,
   nutfree:    /nutmeg|coconut/g
 };
+/* Dietary labels typed in the sheet. Commas inside parentheses stay together, so
+   "Vegan (use vegetable broth, no Parmesan), Gluten-free" is two labels, not four. */
+function dietItems(str){
+  const out = []; let depth = 0, cur = '';
+  for (const ch of String(str||'')){
+    if (ch==='(') depth++; else if (ch===')') depth = Math.max(0, depth-1);
+    if ((ch===',' || ch===';' || ch==='\n') && depth===0){ if (cur.trim()) out.push(cur.trim()); cur = ''; } else cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+const DIET_WORDS = [['vegan',/\bvegan\b/i],['vegetarian',/\bvegetarian\b/i],['glutenfree',/gluten[\s-]?free/i],['dairyfree',/dairy[\s-]?free/i],['nutfree',/\bnut[\s-]?free\b/i],['keto',/\bketo\b|low[\s-]?carb/i],['gerd',/\bgerd\b|reflux/i]];
+function dietKey(item){ const base = String(item).replace(/\(.*$/,''); for (const [k,re] of DIET_WORDS) if (re.test(base)) return k; return ''; }
 function dietSet(r, ingText){
   const out = new Set();
-  const explicit = list(r.dietary).map(x=>strip(x).replace(/[^a-z]/g,''));
+  const explicit = dietItems(r.dietary);
   if (explicit.length){
-    explicit.forEach(x=>out.add(x));
+    explicit.forEach(x=>{ const k = dietKey(x); if (k) out.add(k); });
     if (out.has('vegan')){ out.add('vegetarian'); out.add('dairyfree'); }
     return out;
   }
@@ -1211,8 +1227,10 @@ function relevance(r){
 }
 
 function cardHTML(r){
-  const time = [r.prep&&('Prep '+r.prep), r.cook&&('Cook '+r.cook)].filter(Boolean);
-  const serv = r.servings ? 'Serves '+r.servings : '';
+  /* Cards show the short version ("About 1 hr"); the recipe page shows the full note, such as "(includes making the crepes), plus 1 hr to chill". */
+  const shortTime = t => String(t).split(/\s*\(|,\s*(?:plus|or)\b|\s+plus\s+/i)[0].trim();
+  const time = [r.prep&&('Prep '+shortTime(r.prep)), r.cook&&('Cook '+shortTime(r.cook))].filter(Boolean);
+  const serv = r.servings ? servLabel(r.servings)+' '+(isCount(r.servings) ? String(r.servings).replace(/^About\b/,'about') : r.servings) : '';
   const meta = [serv].concat(time).filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join('');
   return `<a class="card" href="#/recipe/${esc(r.id)}">
     ${r.fav?'<span class="fav-tag" title="Family favorite">&hearts; Family favorite</span>':''}
@@ -1463,14 +1481,16 @@ async function onNoteSubmit(e){
    Recipe view
    --------------------------------------------------------------------- */
 let recipeScale = 1, recipeScaleFor = '', origOpen = false;
+const isCount = sv => /[a-z]/i.test(String(sv).replace(/\b(to|or)\b/gi,''));
+const servLabel = sv => isCount(sv) ? 'Makes' : 'Serves';
 const scaledServings = (sv,k)=> k===1 ? sv : sv.replace(/\d+(?:\.\d+)?/g, n=>fracStr(parseFloat(n)*k));
 
 function dietChipsHTML(r){
   const keys = Object.keys(DIET_LABELS).filter(k=>r.dietSet.has(k));
-  if (!keys.length && !list(r.dietary).length) return '';
+  if (!keys.length && !dietItems(r.dietary).length) return '';
   const chips = r.dietAuto
     ? keys.map(k=>`<span class="chip static small diet" title="Guessed from the ingredient names">${DIET_LABELS[k]}?</span>`)
-    : list(r.dietary).map(d=>`<span class="chip static small diet">${esc(d)}</span>`);
+    : dietItems(r.dietary).filter(d=>!/^none$/i.test(d)).map(d=>`<span class="chip static small diet">${esc(d)}</span>`);
   if (!chips.length) return '';
   return `<div class="diet-line"><span class="lbl">Dietary:</span>${chips.join('')}</div>`
     + (r.dietAuto ? `<p class="diet-note no-print">A question mark means the label is guessed from ingredient names. If anyone has an allergy, check the ingredients and labels yourself.</p>` : '');
@@ -1501,7 +1521,7 @@ function renderRecipe(id){
   }
   flush();
 
-  const facts = [['Serves',r.servings?scaledServings(r.servings,recipeScale):''],['Prep',r.prep],['Cook',r.cook]].filter(f=>f[1]);
+  const facts = [[r.servings?servLabel(r.servings):'Serves',r.servings?scaledServings(r.servings,recipeScale):''],['Prep',r.prep],['Cook',r.cook]].filter(f=>f[1]);
   const pantryLine = ev ? (ev.missing.length
       ? `<p class="pantry-line">You have ${ev.have} of ${ev.total} ingredients. Still needed: ${ev.missing.map(esc).join('; ')}.</p>`
       : `<p class="pantry-line">You have everything you need for this one.</p>`) : '';
@@ -1530,7 +1550,7 @@ function renderRecipe(id){
     <div class="scale-row no-print">
       <label for="scale">Make it</label>
       <select id="scale">${MULTS.map(([v,l])=>`<option value="${v}" ${v===recipeScale?'selected':''}>${l}</option>`).join('')}</select>
-      ${r.servings && recipeScale!==1 ? `<span>Serves ${esc(scaledServings(r.servings,recipeScale))}</span>`:''}
+      ${r.servings && recipeScale!==1 ? `<span>${servLabel(r.servings)} ${esc(scaledServings(r.servings,recipeScale))}</span>`:''}
     </div>
     ${recipeScale!==1?`<p class="scale-note no-print">Ingredient amounts are scaled. Amounts in parentheses, pan sizes, temperatures, and times in the directions are not.</p>`:''}
     ${pantryLine}
